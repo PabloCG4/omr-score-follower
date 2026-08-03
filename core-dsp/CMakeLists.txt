@@ -27,15 +27,37 @@ set(SCORE_FOLLOWER_CORE_PUBLIC_HEADERS
     include/CircularAudioBuffer.hpp
     include/FeatureExtractor.hpp
     include/AlignmentEngine.hpp
+    include/SpectralBackend.hpp
+    include/FeatureExtractorFactory.hpp
+    include/AlignmentEngineFactory.hpp
+)
+
+# Private implementation headers: not installed (see the install(DIRECTORY
+# include/ ...) rule below), listed here only so they show up alongside
+# their .cpp files in IDEs that group sources from the CMake target.
+set(SCORE_FOLLOWER_CORE_PRIVATE_HEADERS
+    src/RadixTwoFft.hpp
+    src/DefaultSpectralBackend.hpp
+    src/SlidingSampleWindow.hpp
+    src/ConstantQFeatureExtractor.hpp
+    src/ChromaRotationTuningCompensator.hpp
+    src/NearestFrameAlignmentEngine.hpp
 )
 
 set(SCORE_FOLLOWER_CORE_SOURCES
     src/LibraryInfo.cpp
+    src/DefaultSpectralBackend.cpp
+    src/ConstantQFeatureExtractor.cpp
+    src/ChromaRotationTuningCompensator.cpp
+    src/NearestFrameAlignmentEngine.cpp
+    src/FeatureExtractorFactory.cpp
+    src/AlignmentEngineFactory.cpp
 )
 
 add_library(score_follower_core SHARED
     ${SCORE_FOLLOWER_CORE_SOURCES}
     ${SCORE_FOLLOWER_CORE_PUBLIC_HEADERS}
+    ${SCORE_FOLLOWER_CORE_PRIVATE_HEADERS}
 )
 add_library(ScoreFollowerCore::score_follower_core ALIAS score_follower_core)
 

@@ -25,6 +25,20 @@ struct FeatureExtractionConfiguration {
     std::size_t constantQBinsPerOctave = 36;
     std::size_t constantQOctaveCount = 7;
     double constantQMinimumFrequencyHz = 32.703195662574829;  // Note C1.
+
+    // Constant pitch-shift correction, in fractional semitones, applied to
+    // every Constant-Q analysis kernel's center frequency before it is
+    // built. Intended to be populated from a previously resolved
+    // AutoCorrelationTuningCompensator offset (see AlignmentEngine.hpp) when
+    // re-configuring the extractor for a specific instrument's tuning.
+    // Zero means no correction (kernels assume standard A4 = 440 Hz).
+    double tuningOffsetSemitones = 0.0;
+
+    // Safety ceiling on the FFT size computed for the lowest analysis
+    // octave. Guards against pathological memory and CPU usage if
+    // constantQMinimumFrequencyHz is configured unreasonably low or
+    // constantQBinsPerOctave unreasonably high; must be a power of two.
+    std::size_t maximumTransformLength = 65536;
 };
 
 // Interface implemented by the concrete DSP pipeline that turns a stream of
