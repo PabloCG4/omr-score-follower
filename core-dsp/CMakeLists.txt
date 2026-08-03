@@ -118,3 +118,20 @@ install(
     DESTINATION include
     FILES_MATCHING PATTERN "*.hpp"
 )
+
+# cqt_validator: a standalone diagnostic CLI, not part of the production
+# library, used to empirically validate the Constant-Q Transform pipeline
+# against real recorded .wav files before the Online DTW alignment stage is
+# implemented. It links against score_follower_core the same way a future
+# host application would: through the public headers and factory functions
+# only, never against the concrete implementation classes in src/.
+add_executable(cqt_validator
+    tests/cqt_validator.cpp
+)
+target_link_libraries(cqt_validator PRIVATE score_follower_core)
+
+if(MSVC)
+    target_compile_options(cqt_validator PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(cqt_validator PRIVATE -Wall -Wextra -Wpedantic)
+endif()
