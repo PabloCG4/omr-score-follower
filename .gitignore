@@ -3,3 +3,14 @@ venv/
 TECHNICAL_CHANGELOG.md
 audio/
 __pycache__/
+core-dsp/build/
+core-dsp/out/
+*.o
+*.obj
+*.dll
+*.so
+*.dylib
+*.lib
+*.exe
+build/
+.vscode/
