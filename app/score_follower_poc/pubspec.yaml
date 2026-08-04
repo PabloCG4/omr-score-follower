@@ -1,13 +1,10 @@
 name: score_follower_poc
 description: >
-  Phase 5.1 proof-of-concept Flutter app: captures microphone audio, drives
-  score_follower_core's Online DTW alignment engine through
-  score_follower_bridge, and renders the raw tracked reference frame index
-  and confidence as they update in real time. Deliberately not a score
-  renderer or page-turn UI; see TECHNICAL_CHANGELOG.md and
-  ../score_follower_bridge/README.md.
+  Phase 5.2 Flutter PoC: captures microphone audio, drives
+  score_follower_core through score_follower_bridge, and maps the tracked
+  reference frame index onto a score page with a smoothly interpolated cursor.
 publish_to: none
-version: 0.1.0
+version: 0.2.0
 
 environment:
   sdk: ^3.10.0
@@ -18,16 +15,9 @@ dependencies:
     sdk: flutter
   score_follower_bridge:
     path: ../score_follower_bridge
-  # Low-latency, cross-platform raw-PCM microphone streaming (see
-  # AudioRecorder.startStream in lib/main.dart). Left unpinned; see
-  # ../score_follower_bridge/pubspec.yaml's own comment on why toolchain
-  # package versions are not guessed in this scaffold.
   record: any
-  # Bundles the matching libc++_shared.so for each target Android ABI from
-  # the installed NDK. score_follower_core links the C++ standard library,
-  # so without this dependency dlopen would silently fail on a real Android
-  # device only (never surfaced by a desktop smoke test).
   android_libcpp_shared: any
+  flutter_svg: any
 
 dev_dependencies:
   flutter_test:
@@ -36,3 +26,8 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/scores/demo_four_chords/manifest.json
+    - assets/scores/demo_four_chords/timeline_map.json
+    - assets/scores/demo_four_chords/reference_chromagram.f32
+    - assets/scores/demo_four_chords/pages/page_0.svg

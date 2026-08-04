@@ -1,0 +1,39 @@
+{
+  "anchors": [
+    {
+      "frameIndex": 0,
+      "pageIndex": 0,
+      "xNorm": 0.12,
+      "yNorm": 0.42,
+      "measureNumber": 1
+    },
+    {
+      "frameIndex": 50,
+      "pageIndex": 0,
+      "xNorm": 0.34,
+      "yNorm": 0.42,
+      "measureNumber": 2
+    },
+    {
+      "frameIndex": 100,
+      "pageIndex": 0,
+      "xNorm": 0.56,
+      "yNorm": 0.42,
+      "measureNumber": 3
+    },
+    {
+      "frameIndex": 150,
+      "pageIndex": 0,
+      "xNorm": 0.78,
+      "yNorm": 0.42,
+      "measureNumber": 4
+    },
+    {
+      "frameIndex": 200,
+      "pageIndex": 0,
+      "xNorm": 0.90,
+      "yNorm": 0.42,
+      "measureNumber": 4
+    }
+  ]
+}

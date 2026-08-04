@@ -1,0 +1,13 @@
+{
+  "scoreId": "demo_four_chords",
+  "sampleRateHz": 22050.0,
+  "hopLengthSamples": 512,
+  "referenceFrameCount": 200,
+  "pages": [
+    {
+      "pageIndex": 0,
+      "assetPath": "pages/page_0.svg",
+      "aspectRatio": 1.7777778
+    }
+  ]
+}
