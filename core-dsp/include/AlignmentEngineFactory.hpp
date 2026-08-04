@@ -12,11 +12,9 @@
 
 namespace scorefollower::dsp {
 
-// Constructs the library's current AlignmentEngine implementation. As of
-// this writing this returns a minimal nearest-frame placeholder (bounded-
-// window cosine-similarity matching, not a real Dynamic Time Warping
-// search); see TECHNICAL_CHANGELOG.md. A real Online DTW engine is planned
-// as a follow-up, drop-in replacement behind this same factory function.
+// Constructs the library's current AlignmentEngine implementation: a
+// row-synchronous, fixed-width-band Online Dynamic Time Warping search (see
+// OnlineDtwAlignmentEngine and TECHNICAL_CHANGELOG.md).
 SCORE_FOLLOWER_CORE_API std::unique_ptr<AlignmentEngine> createAlignmentEngine();
 
 }  // namespace scorefollower::dsp

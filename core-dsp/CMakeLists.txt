@@ -41,7 +41,7 @@ set(SCORE_FOLLOWER_CORE_PRIVATE_HEADERS
     src/SlidingSampleWindow.hpp
     src/ConstantQFeatureExtractor.hpp
     src/ChromaRotationTuningCompensator.hpp
-    src/NearestFrameAlignmentEngine.hpp
+    src/OnlineDtwAlignmentEngine.hpp
 )
 
 set(SCORE_FOLLOWER_CORE_SOURCES
@@ -49,7 +49,7 @@ set(SCORE_FOLLOWER_CORE_SOURCES
     src/DefaultSpectralBackend.cpp
     src/ConstantQFeatureExtractor.cpp
     src/ChromaRotationTuningCompensator.cpp
-    src/NearestFrameAlignmentEngine.cpp
+    src/OnlineDtwAlignmentEngine.cpp
     src/FeatureExtractorFactory.cpp
     src/AlignmentEngineFactory.cpp
 )
