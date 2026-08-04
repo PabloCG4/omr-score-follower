@@ -135,3 +135,19 @@ if(MSVC)
 else()
     target_compile_options(cqt_validator PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+
+# dtw_validator: a standalone diagnostic CLI, not part of the production
+# library, that validates the OnlineDtwAlignmentEngine against a
+# deterministic, in-process synthetic reference chromagram (no external WAV
+# files required). It links against score_follower_core the same way
+# cqt_validator does: through the public headers and factory functions only.
+add_executable(dtw_validator
+    tests/dtw_validator.cpp
+)
+target_link_libraries(dtw_validator PRIVATE score_follower_core)
+
+if(MSVC)
+    target_compile_options(dtw_validator PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(dtw_validator PRIVATE -Wall -Wextra -Wpedantic)
+endif()

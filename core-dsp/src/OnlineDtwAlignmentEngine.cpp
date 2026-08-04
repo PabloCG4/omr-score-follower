@@ -33,7 +33,12 @@ double computeCosineDistance(const ChromaVector& firstVector, const ChromaVector
     if (denominator < 1e-12) {
         return 1.0;  // One or both vectors are silent/near-zero; treat as maximally dissimilar.
     }
-    return 1.0 - (dotProduct / denominator);
+    // Clamped to [0, 1]: for numerically identical vectors, floating-point
+    // rounding in the square roots above can push dotProduct / denominator
+    // an infinitesimal amount above 1.0, which would otherwise surface as a
+    // meaningless negative distance (and a "-0.000" cumulative cost display
+    // artifact) instead of the mathematically exact zero.
+    return std::clamp(1.0 - (dotProduct / denominator), 0.0, 1.0);
 }
 
 // Applies the tuning compensator's resolved whole-semitone offset, following
