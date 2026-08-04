@@ -91,6 +91,15 @@ SCORE_FOLLOWER_CORE_API void score_follower_push_audio_frame(ScoreFollowerEngine
 SCORE_FOLLOWER_CORE_API ScoreFollowerAlignmentPosition
 score_follower_get_alignment_position(const ScoreFollowerEngine* engine);
 
+// Repositions the alignment engine so subsequent audio pushes resume
+// tracking from reference_frame_index (clamped to the loaded reference).
+// Also resets the FeatureExtractor's partial sample accumulator so stale
+// audio from before the seek cannot emit chroma at the old locus. Returns
+// 0 on success, a negative value on a NULL engine or when no reference
+// chromagram has been loaded yet.
+SCORE_FOLLOWER_CORE_API int score_follower_seek_to_reference_frame(ScoreFollowerEngine* engine,
+                                                                    double reference_frame_index);
+
 // Resets the engine's extraction and alignment state (partially
 // accumulated audio, current position, cumulative cost) so a new
 // performance attempt can begin without discarding the already-loaded

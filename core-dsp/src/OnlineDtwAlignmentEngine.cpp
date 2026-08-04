@@ -257,6 +257,37 @@ AlignmentPosition OnlineDtwAlignmentEngine::getCurrentAlignmentPosition() const 
     return position;
 }
 
+void OnlineDtwAlignmentEngine::seekToReferenceFrame(double referenceFrameIndex) {
+    const std::size_t referenceFrameCount = referenceChromagram.frames.size();
+    if (referenceFrameCount == 0) {
+        resetAlignmentState();
+        return;
+    }
+
+    const double clampedFrameIndex = std::clamp(
+        referenceFrameIndex, 0.0, static_cast<double>(referenceFrameCount - 1));
+    const std::size_t targetAbsoluteIndex = static_cast<std::size_t>(std::floor(clampedFrameIndex));
+
+    // Clear path / run-length / EMA state, then re-center the sliding window
+    // so the seek target sits near the middle (or at the start of the piece).
+    resetAlignmentState();
+
+    const std::size_t halfWindow =
+        (windowWidthFrames > 0) ? (windowWidthFrames / 2) : 0;
+    std::size_t desiredStart = 0;
+    if (targetAbsoluteIndex > halfWindow) {
+        desiredStart = targetAbsoluteIndex - halfWindow;
+    }
+    const std::size_t maxStart =
+        (referenceFrameCount > windowWidthFrames) ? (referenceFrameCount - windowWidthFrames) : 0;
+    windowStartReferenceIndex = std::min(desiredStart, maxStart);
+    currentBestReferenceIndexAbsolute = targetAbsoluteIndex;
+    // hasIngestedFirstFrame remains false after resetAlignmentState: the next
+    // live frame re-acquires with the open-begin condition inside the new window.
+
+    publishAlignmentPosition(clampedFrameIndex, 0.0, 0.0);
+}
+
 void OnlineDtwAlignmentEngine::publishAlignmentPosition(double referenceFrameIndex, double alignmentConfidence,
                                                          double cumulativeDistortionCost) noexcept {
     publishedReferenceFrameIndex.store(referenceFrameIndex, std::memory_order_release);

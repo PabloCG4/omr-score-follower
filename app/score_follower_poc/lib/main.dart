@@ -1,12 +1,12 @@
-// Phase 5.2 entry point: thin shell around FollowingSessionController and
-// ScoreViewport. Engine lifecycle, timeline mapping, and cursor interpolation
-// live in lib/session and lib/score; this file only wires the widget tree.
+// Phase 5.3 entry point: tracking shell with AppBar title, gated pagination,
+// click-to-seek, and Start/Stop control bar.
 import 'package:flutter/material.dart';
 
 import 'session/alignment_snapshot.dart';
 import 'session/cursor_display_model.dart';
 import 'session/following_session_controller.dart';
 import 'ui/score_viewport.dart';
+import 'ui/tracking_control_bar.dart';
 
 void main() {
   runApp(const ScoreFollowerPocApp());
@@ -18,7 +18,7 @@ class ScoreFollowerPocApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Score Follower PoC',
+      title: 'Score Follower',
       theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true),
       home: const ScoreFollowerHomePage(),
     );
@@ -64,10 +64,12 @@ class ScoreFollowerHomePageState extends State<ScoreFollowerHomePage>
         final maxFrame = document == null
             ? 0.0
             : document.anchors.last.frameIndex.toDouble();
+        final pageCount = document?.pages.length ?? 0;
+        final title = document?.displayTitle ?? 'Score Follower';
 
         return Scaffold(
           appBar: AppBar(
-            title: const Text('Score Follower PoC'),
+            title: Text(title),
             actions: [
               IconButton(
                 tooltip: 'Toggle frame scrubber',
@@ -104,12 +106,12 @@ class ScoreFollowerHomePageState extends State<ScoreFollowerHomePage>
                           value: cursorDisplayModel.targetFrameIndex
                               .clamp(0.0, maxFrame)
                               .toDouble(),
-                          onChanged: sessionController.isRunning
-                              ? null
-                              : (value) {
+                          onChanged: sessionController.canNavigateManually
+                              ? (value) {
                                   sessionController.scrubToFrameIndex(value);
                                   setState(() {});
-                                },
+                                }
+                              : null,
                         ),
                       ),
                     ],
@@ -139,24 +141,22 @@ class ScoreFollowerHomePageState extends State<ScoreFollowerHomePage>
                     textAlign: TextAlign.center,
                   ),
                 ),
-              Padding(
-                padding: const EdgeInsets.only(bottom: 24.0, top: 8.0),
-                child: ElevatedButton(
-                  onPressed: sessionController.isLoadingScore
-                      ? null
-                      : () {
-                          if (sessionController.isRunning) {
-                            sessionController.stop();
-                          } else {
-                            sessionController.start();
-                          }
-                        },
-                  child: Text(
-                    sessionController.isRunning
-                        ? 'Stop'
-                        : (sessionController.isLoadingScore ? 'Loading…' : 'Start'),
-                  ),
-                ),
+              TrackingControlBar(
+                isRunning: sessionController.isRunning,
+                canNavigateManually: sessionController.canNavigateManually,
+                canGoPrevious: sessionController.currentPageIndex > 0,
+                canGoNext: pageCount > 0 &&
+                    sessionController.currentPageIndex < pageCount - 1,
+                isLoading: sessionController.isLoadingScore,
+                onStartStop: () {
+                  if (sessionController.isRunning) {
+                    sessionController.stop();
+                  } else {
+                    sessionController.start();
+                  }
+                },
+                onPrevious: sessionController.goToPreviousPage,
+                onNext: sessionController.goToNextPage,
               ),
             ],
           ),

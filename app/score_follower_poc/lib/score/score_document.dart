@@ -12,6 +12,7 @@ import 'timeline_anchor.dart';
 final class ScoreDocument {
   const ScoreDocument({
     required this.scoreId,
+    required this.displayTitle,
     required this.sampleRateHz,
     required this.hopLengthSamples,
     required this.pages,
@@ -21,6 +22,10 @@ final class ScoreDocument {
   });
 
   final String scoreId;
+
+  /// Human-readable title shown in the tracking AppBar.
+  final String displayTitle;
+
   final double sampleRateHz;
   final int hopLengthSamples;
   final List<ScorePage> pages;
@@ -68,6 +73,26 @@ final class ScoreDocument {
           'ScoreDocument "$scoreId" timeline anchors must be sorted by '
           'frameIndex ascending (violation at index $index).',
         );
+      }
+    }
+
+    // Within each page, xNorm must be non-decreasing with frameIndex so
+    // forward and reverse timeline mapping stay inverses of each other.
+    final anchorsByPage = <int, List<TimelineAnchor>>{};
+    for (final anchor in anchors) {
+      anchorsByPage.putIfAbsent(anchor.pageIndex, () => <TimelineAnchor>[]).add(anchor);
+    }
+    for (final entry in anchorsByPage.entries) {
+      final pageAnchors = entry.value;
+      for (var index = 1; index < pageAnchors.length; index++) {
+        if (pageAnchors[index].xNorm + 1e-9 < pageAnchors[index - 1].xNorm &&
+            (pageAnchors[index].yNorm - pageAnchors[index - 1].yNorm).abs() <= 1e-4) {
+          throw ArgumentError(
+            'ScoreDocument "$scoreId" page ${entry.key}: within a system, '
+            'xNorm must be non-decreasing with frameIndex '
+            '(violation at frame ${pageAnchors[index].frameIndex}).',
+          );
+        }
       }
     }
   }

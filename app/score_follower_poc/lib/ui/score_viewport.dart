@@ -71,11 +71,19 @@ class ScoreViewportState extends State<ScoreViewport> {
       return const Center(child: Text('No score loaded.'));
     }
 
+    final canNavigate = widget.sessionController.canNavigateManually;
+
     return LayoutBuilder(
       builder: (context, constraints) {
         return PageView.builder(
           controller: pageController,
-          physics: const NeverScrollableScrollPhysics(),
+          physics: canNavigate
+              ? const PageScrollPhysics()
+              : const NeverScrollableScrollPhysics(),
+          onPageChanged: (pageIndex) {
+            lastSyncedPageIndex = pageIndex;
+            widget.sessionController.adoptPageIndexFromViewport(pageIndex);
+          },
           itemCount: document.pages.length,
           itemBuilder: (context, pageIndex) {
             final page = document.pages[pageIndex];
@@ -87,24 +95,36 @@ class ScoreViewportState extends State<ScoreViewport> {
               child: SizedBox(
                 width: pageSize.width,
                 height: pageSize.height,
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    ScorePageLayer(page: page),
-                    ListenableBuilder(
-                      listenable: widget.cursorDisplayModel,
-                      builder: (context, child) {
-                        final model = widget.cursorDisplayModel;
-                        final pose = model.displayedPose;
-                        final hideCursor = model.isPageTransitionInProgress ||
-                            pose.pageIndex != pageIndex;
-                        return CursorOverlay(
-                          pose: pose,
-                          isHidden: hideCursor,
-                        );
-                      },
-                    ),
-                  ],
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTapDown: canNavigate
+                      ? (details) {
+                          widget.sessionController.onScorePageTapped(
+                            pageIndex: pageIndex,
+                            localPosition: details.localPosition,
+                            pageSize: pageSize,
+                          );
+                        }
+                      : null,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      ScorePageLayer(page: page),
+                      ListenableBuilder(
+                        listenable: widget.cursorDisplayModel,
+                        builder: (context, child) {
+                          final model = widget.cursorDisplayModel;
+                          final pose = model.displayedPose;
+                          final hideCursor = model.isPageTransitionInProgress ||
+                              pose.pageIndex != pageIndex;
+                          return CursorOverlay(
+                            pose: pose,
+                            isHidden: hideCursor,
+                          );
+                        },
+                      ),
+                    ],
+                  ),
                 ),
               ),
             );

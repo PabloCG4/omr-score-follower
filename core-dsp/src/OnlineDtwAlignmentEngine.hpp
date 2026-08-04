@@ -70,6 +70,7 @@ public:
     void loadReferenceChromagram(const Chromagram& referenceChromagram) override;
     void ingestLiveChromaVector(const ChromaVector& liveChromaVector) override;
     [[nodiscard]] AlignmentPosition getCurrentAlignmentPosition() const override;
+    void seekToReferenceFrame(double referenceFrameIndex) override;
     AutoCorrelationTuningCompensator& getTuningCompensator() override;
     void reset() override;
 

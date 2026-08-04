@@ -28,6 +28,7 @@ final class ScoreDocumentLoader {
     final sampleRateHz = (manifestJson['sampleRateHz'] as num).toDouble();
     final hopLengthSamples = manifestJson['hopLengthSamples'] as int;
     final referenceFrameCount = manifestJson['referenceFrameCount'] as int;
+    final displayTitle = (manifestJson['displayTitle'] as String?) ?? scoreId;
 
     final pagesJson = manifestJson['pages'] as List<dynamic>;
     final pages = <ScorePage>[
@@ -60,6 +61,7 @@ final class ScoreDocumentLoader {
 
     final document = ScoreDocument(
       scoreId: scoreId,
+      displayTitle: displayTitle,
       sampleRateHz: sampleRateHz,
       hopLengthSamples: hopLengthSamples,
       pages: List<ScorePage>.unmodifiable(pages),

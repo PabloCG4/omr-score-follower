@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:isolate';
+import 'dart:ui' show Offset, Size;
 
 import 'package:flutter/foundation.dart';
 import 'package:record/record.dart';
@@ -7,19 +8,20 @@ import 'package:score_follower_bridge/score_follower_bridge.dart';
 
 import '../score/score_document.dart';
 import '../score/score_document_loader.dart';
+import '../score/score_timeline_mapper.dart';
 import 'alignment_snapshot.dart';
 import 'cursor_display_model.dart';
 
 /// Low-frequency session lifecycle: score load, Start/Stop, engine/mic/isolate
-/// ownership, and the current page index. High-frequency alignment updates go
-/// through [alignmentSnapshot] and [cursorDisplayModel] so the scaffold only
-/// rebuilds on rare session events.
+/// ownership, page navigation, and seek. High-frequency alignment updates go
+/// through [alignmentSnapshot] and [cursorDisplayModel].
 final class FollowingSessionController extends ChangeNotifier {
   FollowingSessionController({
     required this.cursorDisplayModel,
     ScoreDocumentLoader? scoreDocumentLoader,
     AudioRecorder? audioRecorder,
     this.defaultScoreId = 'demo_four_chords',
+    this.timelineMapper = const ScoreTimelineMapper(),
   })  : scoreDocumentLoader = scoreDocumentLoader ?? ScoreDocumentLoader(),
         audioRecorder = audioRecorder ?? AudioRecorder();
 
@@ -27,10 +29,9 @@ final class FollowingSessionController extends ChangeNotifier {
   final ScoreDocumentLoader scoreDocumentLoader;
   final AudioRecorder audioRecorder;
   final String defaultScoreId;
+  final ScoreTimelineMapper timelineMapper;
 
-  /// High-frequency DSP poll channel (~30 Hz). Diagnostics may listen;
-  /// the cursor path consumes it via [setTargetFrameIndex] without rebuilding
-  /// the scaffold.
+  /// High-frequency DSP poll channel (~30 Hz).
   final ValueNotifier<AlignmentSnapshot> alignmentSnapshot =
       ValueNotifier<AlignmentSnapshot>(AlignmentSnapshot.zero);
 
@@ -45,17 +46,25 @@ final class FollowingSessionController extends ChangeNotifier {
   Isolate? audioPushIsolate;
   Timer? uiPollingTimer;
 
-  /// Loads [defaultScoreId] (or [scoreId]) from assets. Safe to call before
-  /// Start; Start will load the default if none is loaded yet.
+  bool get canNavigateManually => !isRunning && scoreDocument != null;
+
+  /// Loads [defaultScoreId] (or [scoreId]) from assets, creates/recreates the
+  /// native engine, and loads the reference chromagram. The engine survives
+  /// subsequent Stop calls so click-to-seek can call FFI while idle.
   Future<void> loadScore({String? scoreId}) async {
     isLoadingScore = true;
     lastErrorMessage = null;
     notifyListeners();
     try {
+      await tearDownCapturePipeline();
+      destroyEngine();
+
       final document = await scoreDocumentLoader.loadFromAssets(scoreId ?? defaultScoreId);
       scoreDocument = document;
       currentPageIndex = 0;
       cursorDisplayModel.attachScoreDocument(document);
+      ensureEngineLoaded(document);
+      seekNativeAndUi(0.0, notifyPage: true);
     } catch (error) {
       lastErrorMessage = error.toString();
     } finally {
@@ -71,7 +80,6 @@ final class FollowingSessionController extends ChangeNotifier {
     lastErrorMessage = null;
     notifyListeners();
 
-    ScoreFollowerEngine? createdEngine;
     Isolate? createdIsolate;
     StreamSubscription<Uint8List>? createdSubscription;
     Timer? createdPollingTimer;
@@ -89,23 +97,17 @@ final class FollowingSessionController extends ChangeNotifier {
         throw StateError('Microphone permission was denied.');
       }
 
-      createdEngine = ScoreFollowerEngine.create(
-        sampleRateHz: document.sampleRateHz,
-        hopLengthSamples: document.hopLengthSamples,
-      );
-      createdEngine.loadReferenceChromagram(
-        pitchClassEnergiesRowMajor: document.referenceChromagramAsDoubles,
-        frameCount: document.referenceFrameCount,
-        sampleRateHz: document.sampleRateHz,
-        hopLengthSamples: document.hopLengthSamples,
-      );
+      ensureEngineLoaded(document);
+      final liveEngine = engine!;
+      // Resume from the UI's authoritative cursor frame (tap/scrub/stop position).
+      liveEngine.seekToReferenceFrame(cursorDisplayModel.displayedFrameIndex);
 
       final pushIsolateReadyPort = ReceivePort();
       createdIsolate = await Isolate.spawn(
         audioPushIsolateEntryPoint,
         AudioPushIsolateStartupMessage(
           readyPort: pushIsolateReadyPort.sendPort,
-          channelDescriptor: createdEngine.audioPushChannel,
+          channelDescriptor: liveEngine.audioPushChannel,
         ),
       );
       final audioPushSendPort = await pushIsolateReadyPort.first as SendPort;
@@ -121,11 +123,11 @@ final class FollowingSessionController extends ChangeNotifier {
       createdSubscription = audioStream.listen(audioPushSendPort.send);
 
       createdPollingTimer = Timer.periodic(const Duration(milliseconds: 33), (_) {
-        final liveEngine = engine;
-        if (liveEngine == null) {
+        final pollingEngine = engine;
+        if (pollingEngine == null) {
           return;
         }
-        final position = liveEngine.getCurrentAlignmentPosition();
+        final position = pollingEngine.getCurrentAlignmentPosition();
         alignmentSnapshot.value = AlignmentSnapshot(
           position: position,
           polledAt: DateTime.now(),
@@ -133,14 +135,13 @@ final class FollowingSessionController extends ChangeNotifier {
         cursorDisplayModel.setTargetFrameIndex(position.referenceFrameIndex);
 
         final mappedPage =
-            cursorDisplayModel.mapper.mapFrameIndex(document, position.referenceFrameIndex).pageIndex;
+            timelineMapper.mapFrameIndex(document, position.referenceFrameIndex).pageIndex;
         if (mappedPage != currentPageIndex) {
           currentPageIndex = mappedPage;
           notifyListeners();
         }
       });
 
-      engine = createdEngine;
       audioPushIsolate = createdIsolate;
       audioStreamSubscription = createdSubscription;
       uiPollingTimer = createdPollingTimer;
@@ -151,7 +152,6 @@ final class FollowingSessionController extends ChangeNotifier {
       createdPollingTimer?.cancel();
       await createdSubscription?.cancel();
       createdIsolate?.kill(priority: Isolate.immediate);
-      createdEngine?.dispose();
       if (await audioRecorder.isRecording()) {
         await audioRecorder.stop();
       }
@@ -162,6 +162,137 @@ final class FollowingSessionController extends ChangeNotifier {
   }
 
   Future<void> stop() async {
+    await tearDownCapturePipeline();
+    cursorDisplayModel.stop();
+    isRunning = false;
+    // Keep engine and cursor/seek position; do not zero the diagnostics strip
+    // to the zero frame — leave the last known / sought position visible.
+    notifyListeners();
+  }
+
+  /// Manual page browse. Enabled only when [canNavigateManually]. Does not
+  /// seek the native engine; visual browsing only.
+  void goToPage(int pageIndex) {
+    if (!canNavigateManually) {
+      return;
+    }
+    final document = scoreDocument;
+    if (document == null) {
+      return;
+    }
+    final clamped = pageIndex.clamp(0, document.pages.length - 1);
+    if (clamped == currentPageIndex) {
+      return;
+    }
+    currentPageIndex = clamped;
+    notifyListeners();
+  }
+
+  /// Called by [ScoreViewport] when the user finishes a manual swipe so the
+  /// session's page index stays in sync without re-triggering animation.
+  void adoptPageIndexFromViewport(int pageIndex) {
+    if (!canNavigateManually) {
+      return;
+    }
+    if (currentPageIndex == pageIndex) {
+      return;
+    }
+    currentPageIndex = pageIndex;
+    notifyListeners();
+  }
+
+  void goToPreviousPage() => goToPage(currentPageIndex - 1);
+
+  void goToNextPage() => goToPage(currentPageIndex + 1);
+
+  /// Snap UI cursor and native ODTW window to [frameIndex]. Rejected while
+  /// tracking so live audio cannot fight a mid-performance teleport.
+  void seekToFrameIndex(double frameIndex) {
+    if (!canNavigateManually) {
+      return;
+    }
+    seekNativeAndUi(frameIndex, notifyPage: true);
+  }
+
+  /// Dev scrubber and tap-to-seek share this path.
+  void scrubToFrameIndex(double frameIndex) {
+    seekToFrameIndex(frameIndex);
+  }
+
+  void onPageTransitionChanged(bool inProgress) {
+    cursorDisplayModel.setPageTransitionInProgress(inProgress);
+  }
+
+  /// Handles a tap in page-local pixels on the letterboxed page of size
+  /// [pageSize], converting to normalized coordinates then seeking.
+  void onScorePageTapped({
+    required int pageIndex,
+    required Offset localPosition,
+    required Size pageSize,
+  }) {
+    if (!canNavigateManually || pageSize.width <= 0 || pageSize.height <= 0) {
+      return;
+    }
+    final document = scoreDocument;
+    if (document == null) {
+      return;
+    }
+    final xNorm = (localPosition.dx / pageSize.width).clamp(0.0, 1.0);
+    final yNorm = (localPosition.dy / pageSize.height).clamp(0.0, 1.0);
+    final frameIndex = timelineMapper.mapTapToFrameIndex(
+      document: document,
+      pageIndex: pageIndex,
+      xNorm: xNorm,
+      yNorm: yNorm,
+    );
+    seekToFrameIndex(frameIndex);
+  }
+
+  void ensureEngineLoaded(ScoreDocument document) {
+    if (engine != null) {
+      return;
+    }
+    final created = ScoreFollowerEngine.create(
+      sampleRateHz: document.sampleRateHz,
+      hopLengthSamples: document.hopLengthSamples,
+    );
+    created.loadReferenceChromagram(
+      pitchClassEnergiesRowMajor: document.referenceChromagramAsDoubles,
+      frameCount: document.referenceFrameCount,
+      sampleRateHz: document.sampleRateHz,
+      hopLengthSamples: document.hopLengthSamples,
+    );
+    engine = created;
+  }
+
+  void seekNativeAndUi(double frameIndex, {required bool notifyPage}) {
+    final document = scoreDocument;
+    cursorDisplayModel.snapToFrameIndex(frameIndex);
+
+    if (document != null && notifyPage) {
+      final mappedPage = timelineMapper.mapFrameIndex(document, frameIndex).pageIndex;
+      if (mappedPage != currentPageIndex) {
+        currentPageIndex = mappedPage;
+      }
+    }
+
+    alignmentSnapshot.value = AlignmentSnapshot(
+      position: ScoreFollowerAlignmentPosition(
+        referenceFrameIndex: frameIndex,
+        alignmentConfidence: 0.0,
+        cumulativeDistortionCost: 0.0,
+      ),
+      polledAt: DateTime.now(),
+    );
+
+    final liveEngine = engine;
+    if (liveEngine != null) {
+      liveEngine.seekToReferenceFrame(frameIndex);
+    }
+    notifyListeners();
+  }
+
+  Future<void> tearDownCapturePipeline() async {
     uiPollingTimer?.cancel();
     uiPollingTimer = null;
 
@@ -174,48 +305,19 @@ final class FollowingSessionController extends ChangeNotifier {
 
     audioPushIsolate?.kill(priority: Isolate.immediate);
     audioPushIsolate = null;
+  }
 
+  void destroyEngine() {
     engine?.dispose();
     engine = null;
-
-    cursorDisplayModel.stop();
-    isRunning = false;
-    alignmentSnapshot.value = AlignmentSnapshot.zero;
-    notifyListeners();
-  }
-
-  /// Dev-only: scrub the cursor target without mic input, to validate the
-  /// timeline mapper and interpolation path.
-  void scrubToFrameIndex(double frameIndex) {
-    cursorDisplayModel.snapToFrameIndex(frameIndex);
-    final document = scoreDocument;
-    if (document == null) {
-      return;
-    }
-    final mappedPage = cursorDisplayModel.mapper.mapFrameIndex(document, frameIndex).pageIndex;
-    if (mappedPage != currentPageIndex) {
-      currentPageIndex = mappedPage;
-      notifyListeners();
-    }
-  }
-
-  void onPageTransitionChanged(bool inProgress) {
-    cursorDisplayModel.setPageTransitionInProgress(inProgress);
   }
 
   @override
   void dispose() {
-    uiPollingTimer?.cancel();
-    uiPollingTimer = null;
-    audioStreamSubscription?.cancel();
-    audioStreamSubscription = null;
-    audioPushIsolate?.kill(priority: Isolate.immediate);
-    audioPushIsolate = null;
-    engine?.dispose();
-    engine = null;
+    unawaited(tearDownCapturePipeline());
+    destroyEngine();
     cursorDisplayModel.stop();
     isRunning = false;
-    // Best-effort async mic teardown; dispose itself cannot await.
     unawaited(() async {
       if (await audioRecorder.isRecording()) {
         await audioRecorder.stop();

@@ -91,6 +91,14 @@ external ScoreFollowerAlignmentPositionNative scoreFollowerGetAlignmentPosition(
   ffi.Pointer<ScoreFollowerEngineHandle> engine,
 );
 
+@ffi.Native<ffi.Int Function(ffi.Pointer<ScoreFollowerEngineHandle>, ffi.Double)>(
+  symbol: 'score_follower_seek_to_reference_frame',
+)
+external int scoreFollowerSeekToReferenceFrame(
+  ffi.Pointer<ScoreFollowerEngineHandle> engine,
+  double referenceFrameIndex,
+);
+
 @ffi.Native<ffi.Void Function(ffi.Pointer<ScoreFollowerEngineHandle>)>(
   symbol: 'score_follower_reset',
 )

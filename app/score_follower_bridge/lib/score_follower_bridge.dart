@@ -288,6 +288,17 @@ final class ScoreFollowerEngine {
     return ScoreFollowerAlignmentPosition._fromNative(bindings.scoreFollowerGetAlignmentPosition(_handle));
   }
 
+  /// Repositions alignment so subsequent audio pushes resume from
+  /// [referenceFrameIndex]. Also clears the feature extractor's partial
+  /// sample buffer. Throws [StateError] if the native call fails.
+  void seekToReferenceFrame(double referenceFrameIndex) {
+    _checkNotDisposed();
+    final resultCode = bindings.scoreFollowerSeekToReferenceFrame(_handle, referenceFrameIndex);
+    if (resultCode != 0) {
+      throw StateError('score_follower_seek_to_reference_frame failed with code $resultCode.');
+    }
+  }
+
   /// Resets the engine's extraction and alignment state so a new
   /// performance attempt can begin without discarding the already-loaded
   /// reference chromagram.

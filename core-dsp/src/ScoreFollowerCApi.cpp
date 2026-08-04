@@ -132,6 +132,19 @@ ScoreFollowerAlignmentPosition score_follower_get_alignment_position(const Score
     }
 }
 
+int score_follower_seek_to_reference_frame(ScoreFollowerEngine* engine, double reference_frame_index) {
+    if (engine == nullptr) {
+        return -1;
+    }
+    try {
+        engine->featureExtractor->reset();
+        engine->alignmentEngine->seekToReferenceFrame(reference_frame_index);
+        return 0;
+    } catch (...) {
+        return -2;
+    }
+}
+
 void score_follower_reset(ScoreFollowerEngine* engine) {
     if (engine == nullptr) {
         return;

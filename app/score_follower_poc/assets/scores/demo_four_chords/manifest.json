@@ -1,5 +1,6 @@
 {
   "scoreId": "demo_four_chords",
+  "displayTitle": "Demo: C - G - Am - F",
   "sampleRateHz": 22050.0,
   "hopLengthSamples": 512,
   "referenceFrameCount": 200,

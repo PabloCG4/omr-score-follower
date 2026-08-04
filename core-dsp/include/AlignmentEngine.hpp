@@ -80,6 +80,12 @@ public:
 
     [[nodiscard]] virtual AlignmentPosition getCurrentAlignmentPosition() const = 0;
 
+    // Repositions the alignment window so subsequent live ingest resumes
+    // tracking from referenceFrameIndex (clamped to the loaded reference).
+    // Clears per-performance DTW path state but preserves the loaded
+    // reference chromagram and any resolved tuning offset.
+    virtual void seekToReferenceFrame(double referenceFrameIndex) = 0;
+
     // Grants access to the tuning compensation subsystem so the host
     // application can feed it calibration frames and query its resolved
     // offset independently of the main alignment path.
