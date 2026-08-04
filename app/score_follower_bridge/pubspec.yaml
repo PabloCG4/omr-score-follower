@@ -1,0 +1,36 @@
+name: score_follower_bridge
+description: >
+  Dart FFI bridge exposing the score_follower_core C++ engine (Constant-Q
+  feature extraction and Online DTW score alignment, see ../../core-dsp) to
+  Flutter host applications. A plain Dart package, not a Flutter plugin: it
+  needs no platform-channel/Gradle/CocoaPods integration, only a Dart build
+  hook (hook/build.dart) that compiles core-dsp's own, unmodified CMake
+  project and exposes the resulting shared library as a native code asset.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.10.0
+
+dependencies:
+  ffi: any
+  # Native-assets build-hook toolchain. These packages implement the
+  # dart:ffi "code asset" machinery (see https://dart.dev/tools/hooks) that
+  # hook/build.dart and lib/src/score_follower_bindings.dart's @Native
+  # bindings both depend on. Left unpinned (`any`) rather than guessing a
+  # specific version: this toolchain is explicitly documented upstream as
+  # still evolving, and the correct current versions should be resolved by
+  # running `dart pub get`/`flutter pub get` against a real Dart SDK, which
+  # was not available in the environment this package was scaffolded in.
+  code_assets: any
+  hooks: any
+  native_toolchain_cmake: any
+
+dev_dependencies:
+  # Only needed to regenerate lib/src/score_follower_bindings.dart from
+  # ../../core-dsp/include/ScoreFollowerCApi.h via `dart run ffigen`; not
+  # required at build-hook-execution time, hence dev_dependencies rather
+  # than dependencies. See ffigen.yaml.
+  ffigen: any
+  lints: any
+  test: any

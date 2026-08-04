@@ -30,6 +30,7 @@ set(SCORE_FOLLOWER_CORE_PUBLIC_HEADERS
     include/SpectralBackend.hpp
     include/FeatureExtractorFactory.hpp
     include/AlignmentEngineFactory.hpp
+    include/ScoreFollowerCApi.h
 )
 
 # Private implementation headers: not installed (see the install(DIRECTORY
@@ -52,6 +53,7 @@ set(SCORE_FOLLOWER_CORE_SOURCES
     src/OnlineDtwAlignmentEngine.cpp
     src/FeatureExtractorFactory.cpp
     src/AlignmentEngineFactory.cpp
+    src/ScoreFollowerCApi.cpp
 )
 
 add_library(score_follower_core SHARED
@@ -107,47 +109,67 @@ if(NOT MSVC)
     target_compile_options(score_follower_core PRIVATE -fno-rtti)
 endif()
 
-install(
-    TARGETS score_follower_core
+# Install layout consumed by app/score_follower_bridge/hook/build.dart via
+# native_toolchain_cmake's `targets: ['install']`. The Flutter build hook
+# always passes -DCMAKE_INSTALL_PREFIX=<hook-output>/install so this never
+# tries to write into Program Files on Windows. Layout:
+#   <prefix>/bin/score_follower_core.dll   (Windows RUNTIME)
+#   <prefix>/lib/libscore_follower_core.so (POSIX LIBRARY)
+#   <prefix>/lib/score_follower_core.lib   (Windows ARCHIVE / import library)
+#   <prefix>/include/*.hpp, *.h
+install(TARGETS score_follower_core
     LIBRARY DESTINATION lib
-    RUNTIME DESTINATION bin
     ARCHIVE DESTINATION lib
+    RUNTIME DESTINATION bin
 )
 install(
     DIRECTORY include/
     DESTINATION include
-    FILES_MATCHING PATTERN "*.hpp"
+    FILES_MATCHING
+        PATTERN "*.hpp"
+        PATTERN "*.h"
 )
 
-# cqt_validator: a standalone diagnostic CLI, not part of the production
-# library, used to empirically validate the Constant-Q Transform pipeline
-# against real recorded .wav files before the Online DTW alignment stage is
-# implemented. It links against score_follower_core the same way a future
-# host application would: through the public headers and factory functions
-# only, never against the concrete implementation classes in src/.
-add_executable(cqt_validator
-    tests/cqt_validator.cpp
-)
-target_link_libraries(cqt_validator PRIVATE score_follower_core)
+# Diagnostic CLI validators (cqt_validator, dtw_validator) are desktop-only
+# throwaway tools, never consumed by a host application; cross-compiling
+# them for a mobile target (e.g. from a Flutter build hook driving this same
+# CMakeLists.txt through native_toolchain_cmake) is wasted build time and a
+# potential source of failures unrelated to score_follower_core itself, so
+# mobile build hooks are expected to configure this project with
+# -DSCORE_FOLLOWER_CORE_BUILD_VALIDATORS=OFF.
+option(SCORE_FOLLOWER_CORE_BUILD_VALIDATORS "Build diagnostic CLI validators (cqt_validator, dtw_validator)" ON)
 
-if(MSVC)
-    target_compile_options(cqt_validator PRIVATE /W4 /permissive-)
-else()
-    target_compile_options(cqt_validator PRIVATE -Wall -Wextra -Wpedantic)
-endif()
+if(SCORE_FOLLOWER_CORE_BUILD_VALIDATORS)
+    # cqt_validator: a standalone diagnostic CLI, not part of the production
+    # library, used to empirically validate the Constant-Q Transform pipeline
+    # against real recorded .wav files before the Online DTW alignment stage is
+    # implemented. It links against score_follower_core the same way a future
+    # host application would: through the public headers and factory functions
+    # only, never against the concrete implementation classes in src/.
+    add_executable(cqt_validator
+        tests/cqt_validator.cpp
+    )
+    target_link_libraries(cqt_validator PRIVATE score_follower_core)
 
-# dtw_validator: a standalone diagnostic CLI, not part of the production
-# library, that validates the OnlineDtwAlignmentEngine against a
-# deterministic, in-process synthetic reference chromagram (no external WAV
-# files required). It links against score_follower_core the same way
-# cqt_validator does: through the public headers and factory functions only.
-add_executable(dtw_validator
-    tests/dtw_validator.cpp
-)
-target_link_libraries(dtw_validator PRIVATE score_follower_core)
+    if(MSVC)
+        target_compile_options(cqt_validator PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(cqt_validator PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
 
-if(MSVC)
-    target_compile_options(dtw_validator PRIVATE /W4 /permissive-)
-else()
-    target_compile_options(dtw_validator PRIVATE -Wall -Wextra -Wpedantic)
+    # dtw_validator: a standalone diagnostic CLI, not part of the production
+    # library, that validates the OnlineDtwAlignmentEngine against a
+    # deterministic, in-process synthetic reference chromagram (no external WAV
+    # files required). It links against score_follower_core the same way
+    # cqt_validator does: through the public headers and factory functions only.
+    add_executable(dtw_validator
+        tests/dtw_validator.cpp
+    )
+    target_link_libraries(dtw_validator PRIVATE score_follower_core)
+
+    if(MSVC)
+        target_compile_options(dtw_validator PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(dtw_validator PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
 endif()
