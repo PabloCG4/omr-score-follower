@@ -47,7 +47,7 @@ final class CursorDisplayModel extends ChangeNotifier {
   ScoreDocument? scoreDocument;
   TrackingMode trackingMode = TrackingMode.rubato;
   double referenceSecondsPerFrame = 512.0 / 22050.0;
-  double strictConfidenceThreshold = 0.35;
+  double strictConfidenceThreshold = 0.55;
 
   double targetFrameIndex = 0.0;
   double displayedFrameIndex = 0.0;
@@ -63,7 +63,11 @@ final class CursorDisplayModel extends ChangeNotifier {
 
   void attachScoreDocument(ScoreDocument document) {
     scoreDocument = document;
-    referenceSecondsPerFrame = document.hopLengthSamples / document.sampleRateHz;
+    // Explicit double division: hop/sampleRate is the authored seconds per
+    // reference frame (e.g. 512/22050 ≈ 23.2 ms). Inverting this would race
+    // the Fixed Tempo cursor by a factor of ~sampleRate.
+    referenceSecondsPerFrame =
+        document.hopLengthSamples.toDouble() / document.sampleRateHz;
     targetFrameIndex = 0.0;
     displayedFrameIndex = 0.0;
     displayedPose = mapper.mapFrameIndex(document, 0.0);
@@ -89,15 +93,16 @@ final class CursorDisplayModel extends ChangeNotifier {
     required double alignmentConfidence,
     required bool sessionIsRunning,
   }) {
+    const warningBandFloor = 0.35;
     final CursorHealth next;
     if (!sessionIsRunning) {
       next = CursorHealth.healthy;
     } else if (trackingMode == TrackingMode.strict &&
         alignmentConfidence < strictConfidenceThreshold) {
       next = CursorHealth.waitingStrict;
-    } else if (alignmentConfidence < strictConfidenceThreshold) {
+    } else if (alignmentConfidence < warningBandFloor) {
       next = CursorHealth.critical;
-    } else if (alignmentConfidence < 0.55) {
+    } else if (alignmentConfidence < strictConfidenceThreshold) {
       next = CursorHealth.warning;
     } else {
       next = CursorHealth.healthy;
@@ -109,9 +114,11 @@ final class CursorDisplayModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Applies a DSP poll target. Ignored while Fixed Tempo owns the clock.
+  /// Applies a DSP poll target. Always ignored in Fixed Tempo: the wall-clock
+  /// frame clock owns cursor motion regardless of whether the session ticker
+  /// has started yet (avoids a race where an early poll could leap the cursor).
   void setTargetFrameIndex(double frameIndex) {
-    if (trackingMode == TrackingMode.fixedTempo && isRunning) {
+    if (trackingMode == TrackingMode.fixedTempo) {
       return;
     }
     targetFrameIndex = frameIndex;
@@ -199,14 +206,19 @@ final class CursorDisplayModel extends ChangeNotifier {
     }
 
     final document = scoreDocument!;
-    final maxFrameIndex = document.anchors.last.frameIndex.toDouble();
+    final maxFrameIndex = (document.referenceFrameCount > 0)
+        ? (document.referenceFrameCount - 1).toDouble()
+        : document.anchors.last.frameIndex.toDouble();
 
     if (trackingMode == TrackingMode.fixedTempo && isRunning) {
-      final secondsPerFrame = referenceSecondsPerFrame > 0.0
+      // framesAdvanced = dtSeconds / secondsPerFrame.
+      // Example: dt=1/60, spf=512/22050 → ~0.72 frames per vsync ≈ 43 fps.
+      final secondsPerFrame = referenceSecondsPerFrame > 1e-9
           ? referenceSecondsPerFrame
-          : (document.hopLengthSamples / document.sampleRateHz);
+          : (document.hopLengthSamples.toDouble() / document.sampleRateHz);
+      final framesAdvanced = deltaSeconds / secondsPerFrame;
       targetFrameIndex =
-          (targetFrameIndex + deltaSeconds / secondsPerFrame).clamp(0.0, maxFrameIndex);
+          (targetFrameIndex + framesAdvanced).clamp(0.0, maxFrameIndex);
     }
 
     final targetPose = mapper.mapFrameIndex(document, targetFrameIndex);

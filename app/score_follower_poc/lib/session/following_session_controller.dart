@@ -88,12 +88,20 @@ final class FollowingSessionController extends ChangeNotifier {
     if (liveEngine == null) {
       return;
     }
-    // Fixed Tempo: native still aligns like Rubato for confidence only.
-    final nativeMode = switch (sessionConfig.trackingMode) {
-      TrackingMode.strict => ScoreFollowerTrackingMode.strict,
-      TrackingMode.rubato => ScoreFollowerTrackingMode.rubato,
-      TrackingMode.fixedTempo => ScoreFollowerTrackingMode.fixedTempo,
-    };
+    // Explicit enum map onto C ABI integers (rubato=0, strict=1, fixedTempo=2).
+    final ScoreFollowerTrackingMode nativeMode;
+    switch (sessionConfig.trackingMode) {
+      case TrackingMode.rubato:
+        nativeMode = ScoreFollowerTrackingMode.rubato;
+        break;
+      case TrackingMode.strict:
+        nativeMode = ScoreFollowerTrackingMode.strict;
+        break;
+      case TrackingMode.fixedTempo:
+        // Native alignment stays Rubato-equivalent; Dart owns the cursor.
+        nativeMode = ScoreFollowerTrackingMode.fixedTempo;
+        break;
+    }
     liveEngine.setTrackingMode(nativeMode);
     liveEngine.setStrictConfidenceThreshold(sessionConfig.strictConfidenceThreshold);
   }

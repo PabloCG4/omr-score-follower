@@ -121,7 +121,8 @@ class TrackingScreenState extends State<TrackingScreen>
                 child: ConfidenceBar(
                   alignmentSnapshot: sessionController.alignmentSnapshot,
                   isRunning: sessionController.isRunning,
-                  criticalThreshold: widget.config.strictConfidenceThreshold,
+                  warningThreshold: widget.config.strictConfidenceThreshold,
+                  criticalThreshold: 0.35,
                 ),
               ),
               Padding(

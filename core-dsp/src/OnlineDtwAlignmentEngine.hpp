@@ -58,14 +58,21 @@ public:
     // column, used to derive AlignmentPosition::alignmentConfidence as a
     // bounded, non-decaying quality signal (deliberately decoupled from the
     // monotonically growing cumulative DTW cost).
+    // Default skip penalty is deliberately heavier than stall so noise and
+    // silence prefer holding the reference index rather than racing forward.
+    // poorMatchLocalDistanceThreshold (default 0.45 => confidence 0.55)
+    // gates MaxRunCount stall escalation and caps reference advance when the
+    // smoothed match quality is in the amber/red band.
     explicit OnlineDtwAlignmentEngine(std::size_t windowWidthFramesValue = 200,
                                        std::size_t referenceCalibrationFrameCountValue = 100,
-                                       double stallStepPenaltyValue = 0.15,
-                                       double skipStepPenaltyValue = 0.15,
-                                       std::size_t maxPlausibleSkipPerFrameValue = 4,
-                                       std::size_t maxRunLengthFramesValue = 15,
+                                       double stallStepPenaltyValue = 0.10,
+                                       double skipStepPenaltyValue = 0.55,
+                                       std::size_t maxPlausibleSkipPerFrameValue = 1,
+                                       std::size_t maxRunLengthFramesValue = 20,
                                        double runLengthEscalationPenaltyValue = 0.5,
-                                       double confidenceSmoothingFactorValue = 0.1);
+                                       double confidenceSmoothingFactorValue = 0.1,
+                                       double poorMatchLocalDistanceThresholdValue = 0.45,
+                                       double poorMatchAdvancePenaltyValue = 1.5);
 
     void loadReferenceChromagram(const Chromagram& referenceChromagram) override;
     void ingestLiveChromaVector(const ChromaVector& liveChromaVector) override;
@@ -102,9 +109,17 @@ private:
     std::size_t maxRunLengthFrames;
     double runLengthEscalationPenalty;
     double confidenceSmoothingFactor;
+    // Local cosine distance at/above this value is treated as a poor match
+    // (alignmentConfidence = 1 - distance falls to ~0.55 and below).
+    double poorMatchLocalDistanceThreshold;
+    // Extra cost added to diagonal/skip predecessors while the match is poor,
+    // biasing the recurrence toward stall (hold position) on noise/silence.
+    double poorMatchAdvancePenalty;
 
     TrackingMode trackingMode = TrackingMode::Rubato;
-    double strictConfidenceThreshold = 0.35;
+    // Default aligns with the UI amber/green boundary so Strict freezes on
+    // yellow confidence as well as red.
+    double strictConfidenceThreshold = 0.55;
 
     Chromagram referenceChromagram{};
 

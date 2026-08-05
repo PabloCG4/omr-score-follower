@@ -106,7 +106,7 @@ abstract final class ScoreFollowerTrackingModeNative {
   static const int fixedTempo = 2;
 }
 
-@ffi.Native<ffi.Int Function(ffi.Pointer<ScoreFollowerEngineHandle>, ffi.Int32)>(
+@ffi.Native<ffi.Int Function(ffi.Pointer<ScoreFollowerEngineHandle>, ffi.Int)>(
   symbol: 'score_follower_set_tracking_mode',
 )
 external int scoreFollowerSetTrackingMode(

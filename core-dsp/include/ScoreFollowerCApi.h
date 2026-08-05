@@ -114,8 +114,9 @@ SCORE_FOLLOWER_CORE_API int score_follower_set_tracking_mode(ScoreFollowerEngine
                                                               ScoreFollowerTrackingMode mode);
 
 // Confidence below which STRICT mode freezes reference advance. Default is
-// approximately 0.35. Returns 0 on success, a negative value on a NULL
-// engine or a non-finite / out-of-range threshold.
+// approximately 0.55 (aligned with the amber/green UI boundary). Returns 0
+// on success, a negative value on a NULL engine or a non-finite /
+// out-of-range threshold.
 SCORE_FOLLOWER_CORE_API int score_follower_set_strict_confidence_threshold(
     ScoreFollowerEngine* engine, double threshold);
 

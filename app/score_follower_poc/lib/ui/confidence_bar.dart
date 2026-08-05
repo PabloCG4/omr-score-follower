@@ -16,7 +16,11 @@ class ConfidenceBar extends StatelessWidget {
 
   final ValueListenable<AlignmentSnapshot> alignmentSnapshot;
   final bool isRunning;
+
+  /// Green at/above this value. Also the Strict freeze threshold by default.
   final double warningThreshold;
+
+  /// Red below this value; amber between [criticalThreshold] and [warningThreshold].
   final double criticalThreshold;
 
   @override

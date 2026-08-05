@@ -7,7 +7,9 @@ final class TrackingSessionConfig {
   const TrackingSessionConfig({
     required this.trackingMode,
     this.scoreId = 'demo_four_chords',
-    this.strictConfidenceThreshold = 0.35,
+    // Aligned with the ConfidenceBar amber/green boundary so Strict (and the
+    // native poor-match advance cap) freeze on yellow as well as red.
+    this.strictConfidenceThreshold = 0.55,
   });
 
   final TrackingMode trackingMode;

@@ -67,7 +67,9 @@ OnlineDtwAlignmentEngine::OnlineDtwAlignmentEngine(std::size_t windowWidthFrames
                                                     std::size_t maxPlausibleSkipPerFrameValue,
                                                     std::size_t maxRunLengthFramesValue,
                                                     double runLengthEscalationPenaltyValue,
-                                                    double confidenceSmoothingFactorValue)
+                                                    double confidenceSmoothingFactorValue,
+                                                    double poorMatchLocalDistanceThresholdValue,
+                                                    double poorMatchAdvancePenaltyValue)
     : windowWidthFrames(windowWidthFramesValue),
       referenceCalibrationFrameCount(referenceCalibrationFrameCountValue),
       stallStepPenalty(stallStepPenaltyValue),
@@ -75,7 +77,9 @@ OnlineDtwAlignmentEngine::OnlineDtwAlignmentEngine(std::size_t windowWidthFrames
       maxPlausibleSkipPerFrame(maxPlausibleSkipPerFrameValue),
       maxRunLengthFrames(maxRunLengthFramesValue),
       runLengthEscalationPenalty(runLengthEscalationPenaltyValue),
-      confidenceSmoothingFactor(confidenceSmoothingFactorValue) {
+      confidenceSmoothingFactor(confidenceSmoothingFactorValue),
+      poorMatchLocalDistanceThreshold(poorMatchLocalDistanceThresholdValue),
+      poorMatchAdvancePenalty(poorMatchAdvancePenaltyValue) {
     // The only allocation in this class: two fixed-size row buffers, sized
     // once here and never reallocated. ingestLiveChromaVector only ever
     // swaps the previousRowCost/currentRowCost pointers between them and
@@ -163,13 +167,19 @@ void OnlineDtwAlignmentEngine::ingestLiveChromaVector(const ChromaVector& liveCh
 
     const std::size_t activeWindowWidth = std::min(windowWidthFrames, referenceFrameCount - windowStartReferenceIndex);
 
-    // While Strict is already below threshold, disallow skip so the path
-    // cannot walk forward on noise; stall (or diagonal match) remains viable.
+    // Match-quality signals from the previous published state. Used both to
+    // bias the recurrence (prefer stall on noise) and to hard-cap how far
+    // the published reference index may advance on this live frame.
     const double previousPublishedConfidence =
         publishedAlignmentConfidence.load(std::memory_order_relaxed);
-    const bool strictSkipDisallowed =
-        (trackingMode == TrackingMode::Strict) &&
-        (previousPublishedConfidence < strictConfidenceThreshold);
+    const bool previousMatchIsPoor =
+        hasEmaLocalDistance && (emaLocalDistance >= poorMatchLocalDistanceThreshold);
+    const bool previousConfidenceIsPoor =
+        previousPublishedConfidence < strictConfidenceThreshold;
+    // Strict always forbids multi-frame skips; Rubato also forbids them while
+    // the match is already in the amber/red band so silence cannot race.
+    const bool skipDisallowed = (trackingMode == TrackingMode::Strict) || previousMatchIsPoor ||
+                                previousConfidenceIsPoor;
 
     double bestCostInRow = PositiveInfinity;
     std::size_t bestRelativeIndex = 0;
@@ -177,7 +187,8 @@ void OnlineDtwAlignmentEngine::ingestLiveChromaVector(const ChromaVector& liveCh
 
     for (std::size_t relativeIndex = 0; relativeIndex < activeWindowWidth; ++relativeIndex) {
         const std::size_t absoluteReferenceIndex = windowStartReferenceIndex + relativeIndex;
-        const double localDistance = computeCosineDistance(correctedLiveVector, referenceChromagram.frames[absoluteReferenceIndex]);
+        const double localDistance =
+            computeCosineDistance(correctedLiveVector, referenceChromagram.frames[absoluteReferenceIndex]);
 
         double accumulatedCost;
         if (!hasIngestedFirstFrame) {
@@ -186,7 +197,7 @@ void OnlineDtwAlignmentEngine::ingestLiveChromaVector(const ChromaVector& liveCh
             // reference frame 0, tolerating a short lead-in silence/pickup.
             accumulatedCost = localDistance;
         } else {
-            const double diagonalPredecessor =
+            double diagonalPredecessor =
                 (relativeIndex > 0) ? (*previousRowCost)[relativeIndex - 1] : costBeforeWindowStart;
             const double leftPredecessorForSkip =
                 (relativeIndex > 0) ? (*currentRowCost)[relativeIndex - 1] : costBeforeWindowStart;
@@ -194,24 +205,35 @@ void OnlineDtwAlignmentEngine::ingestLiveChromaVector(const ChromaVector& liveCh
             double stallPredecessor = (*previousRowCost)[relativeIndex] + stallStepPenalty;
             double skipPredecessor = leftPredecessorForSkip + skipStepPenalty;
 
-            // Dixon-style MaxRunCount safeguard: once a degenerate run has
-            // persisted for too long, escalate its penalty so the softer,
-            // constant per-step penalty above is no longer enough to keep
-            // choosing it, forcing the path back toward the diagonal.
-            if (consecutiveStallFrames >= maxRunLengthFrames) {
+            // Local-distance-dependent advance penalty: a poor match at this
+            // column must not be cheaper to reach by skipping or walking the
+            // diagonal than by stalling on the previously tracked column.
+            if (localDistance >= poorMatchLocalDistanceThreshold || previousMatchIsPoor) {
+                diagonalPredecessor += poorMatchAdvancePenalty;
+                skipPredecessor += poorMatchAdvancePenalty;
+            }
+
+            // Dixon-style MaxRunCount: escalate only while the match is still
+            // good. Escalating stall during silence/wrong notes was the primary
+            // runaway mechanism (forced forward progress on noise).
+            if (!previousMatchIsPoor && !previousConfidenceIsPoor &&
+                consecutiveStallFrames >= maxRunLengthFrames) {
                 stallPredecessor +=
-                    static_cast<double>(consecutiveStallFrames - maxRunLengthFrames + 1) * runLengthEscalationPenalty;
+                    static_cast<double>(consecutiveStallFrames - maxRunLengthFrames + 1) *
+                    runLengthEscalationPenalty;
             }
             if (consecutiveSkipFrames >= maxRunLengthFrames) {
                 skipPredecessor +=
-                    static_cast<double>(consecutiveSkipFrames - maxRunLengthFrames + 1) * runLengthEscalationPenalty;
+                    static_cast<double>(consecutiveSkipFrames - maxRunLengthFrames + 1) *
+                    runLengthEscalationPenalty;
             }
 
-            if (strictSkipDisallowed) {
+            if (skipDisallowed) {
                 skipPredecessor = PositiveInfinity;
             }
 
-            accumulatedCost = localDistance + std::min({diagonalPredecessor, stallPredecessor, skipPredecessor});
+            accumulatedCost =
+                localDistance + std::min({diagonalPredecessor, stallPredecessor, skipPredecessor});
         }
 
         (*currentRowCost)[relativeIndex] = accumulatedCost;
@@ -222,7 +244,7 @@ void OnlineDtwAlignmentEngine::ingestLiveChromaVector(const ChromaVector& liveCh
         }
     }
 
-    const std::size_t jBestAbsolute = windowStartReferenceIndex + bestRelativeIndex;
+    std::size_t jBestAbsolute = windowStartReferenceIndex + bestRelativeIndex;
 
     emaLocalDistance = hasEmaLocalDistance ? (confidenceSmoothingFactor * bestLocalDistance +
                                                (1.0 - confidenceSmoothingFactor) * emaLocalDistance)
@@ -230,18 +252,37 @@ void OnlineDtwAlignmentEngine::ingestLiveChromaVector(const ChromaVector& liveCh
     hasEmaLocalDistance = true;
     const double alignmentConfidence = std::clamp(1.0 - emaLocalDistance, 0.0, 1.0);
 
-    // Strict gate: keep ingesting and publishing confidence, but freeze the
-    // published reference index and refuse to slide the DTW window so the
-    // band stays anchored on the expected note until match quality recovers.
+    // Hard advance cap: while confidence is below the Strict / amber boundary,
+    // the published reference index must not move forward (Rubato and Strict).
+    // This is belt-and-suspenders with the recurrence bias above. Also covers
+    // the open-begin frame after seek so a poor first match cannot teleport.
+    const bool confidenceBlocksAdvance = alignmentConfidence < strictConfidenceThreshold;
+    if (confidenceBlocksAdvance && jBestAbsolute > currentBestReferenceIndexAbsolute) {
+        jBestAbsolute = currentBestReferenceIndexAbsolute;
+        if (jBestAbsolute >= windowStartReferenceIndex) {
+            bestRelativeIndex = jBestAbsolute - windowStartReferenceIndex;
+        } else {
+            bestRelativeIndex = 0;
+            jBestAbsolute = windowStartReferenceIndex;
+        }
+    }
+
+    // Strict gate: freeze the published index at the last good frame, keep
+    // updating confidence for the UI, and never slide the DTW window.
     const bool strictGateActive =
-        (trackingMode == TrackingMode::Strict) && (alignmentConfidence < strictConfidenceThreshold);
+        (trackingMode == TrackingMode::Strict) && confidenceBlocksAdvance;
 
     if (strictGateActive) {
         consecutiveStallFrames = hasIngestedFirstFrame ? (consecutiveStallFrames + 1) : 0;
         consecutiveSkipFrames = 0;
         hasIngestedFirstFrame = true;
+        // Keep internal best pinned so recovery resumes from the stalled note.
         const double stalledReferenceFrameIndex =
             publishedReferenceFrameIndex.load(std::memory_order_relaxed);
+        if (stalledReferenceFrameIndex >= 0.0) {
+            currentBestReferenceIndexAbsolute =
+                static_cast<std::size_t>(std::floor(stalledReferenceFrameIndex));
+        }
         publishAlignmentPosition(stalledReferenceFrameIndex, alignmentConfidence, bestCostInRow);
     } else {
         if (hasIngestedFirstFrame) {
@@ -259,18 +300,21 @@ void OnlineDtwAlignmentEngine::ingestLiveChromaVector(const ChromaVector& liveCh
 
         publishAlignmentPosition(static_cast<double>(jBestAbsolute), alignmentConfidence, bestCostInRow);
 
-        // Slide the window forward once the best-matching column has advanced
-        // close enough to the trailing edge that continued progress would soon
-        // run off the end of the currently retained band.
-        constexpr std::size_t slideThresholdFrames = 20;
-        constexpr std::size_t slideAmountFrames = 20;
-        const bool windowIsFull = (activeWindowWidth == windowWidthFrames);
-        const bool morePieceRemainsAhead = (windowStartReferenceIndex + windowWidthFrames) < referenceFrameCount;
-        if (windowIsFull && morePieceRemainsAhead && (bestRelativeIndex + slideThresholdFrames >= windowWidthFrames)) {
-            std::size_t actualSlideAmount =
-                std::min(slideAmountFrames, referenceFrameCount - (windowStartReferenceIndex + windowWidthFrames));
-            actualSlideAmount = std::min(actualSlideAmount, bestRelativeIndex);
-            slideWindowForward(actualSlideAmount);
+        // Never slide while confidence is poor: sliding would drag the search
+        // band away from the expected note and prevent recovery.
+        if (!confidenceBlocksAdvance) {
+            constexpr std::size_t slideThresholdFrames = 20;
+            constexpr std::size_t slideAmountFrames = 20;
+            const bool windowIsFull = (activeWindowWidth == windowWidthFrames);
+            const bool morePieceRemainsAhead =
+                (windowStartReferenceIndex + windowWidthFrames) < referenceFrameCount;
+            if (windowIsFull && morePieceRemainsAhead &&
+                (bestRelativeIndex + slideThresholdFrames >= windowWidthFrames)) {
+                std::size_t actualSlideAmount = std::min(
+                    slideAmountFrames, referenceFrameCount - (windowStartReferenceIndex + windowWidthFrames));
+                actualSlideAmount = std::min(actualSlideAmount, bestRelativeIndex);
+                slideWindowForward(actualSlideAmount);
+            }
         }
     }
 
