@@ -8,6 +8,7 @@ import '../session/following_session_controller.dart';
 import 'confidence_bar.dart';
 import 'score_viewport.dart';
 import 'tracking_control_bar.dart';
+import 'tracking_countdown_overlay.dart';
 
 /// Tracking shell: score viewport, confidence bar, and Start/Stop controls.
 /// Receives an immutable [TrackingSessionConfig] from [InitialConfigScreen].
@@ -86,9 +87,21 @@ class TrackingScreenState extends State<TrackingScreen>
               Expanded(
                 child: Padding(
                   padding: const EdgeInsets.all(16.0),
-                  child: ScoreViewport(
-                    sessionController: sessionController,
-                    cursorDisplayModel: cursorDisplayModel,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      ScoreViewport(
+                        sessionController: sessionController,
+                        cursorDisplayModel: cursorDisplayModel,
+                      ),
+                      if (sessionController.isCountingDown)
+                        TrackingCountdownOverlay(
+                          secondsRemaining:
+                              sessionController.countdownSecondsRemaining,
+                          isArmingPipeline:
+                              sessionController.isArmingCapturePipeline,
+                        ),
+                    ],
                   ),
                 ),
               ),
@@ -151,13 +164,14 @@ class TrackingScreenState extends State<TrackingScreen>
                 ),
               TrackingControlBar(
                 isRunning: sessionController.isRunning,
+                isCountingDown: sessionController.isCountingDown,
                 canNavigateManually: sessionController.canNavigateManually,
                 canGoPrevious: sessionController.currentPageIndex > 0,
                 canGoNext: pageCount > 0 &&
                     sessionController.currentPageIndex < pageCount - 1,
                 isLoading: sessionController.isLoadingScore,
                 onStartStop: () {
-                  if (sessionController.isRunning) {
+                  if (sessionController.isSessionActive) {
                     sessionController.stop();
                   } else {
                     sessionController.start();

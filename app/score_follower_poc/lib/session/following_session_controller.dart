@@ -39,18 +39,32 @@ final class FollowingSessionController extends ChangeNotifier {
 
   ScoreDocument? scoreDocument;
   bool isRunning = false;
+  bool isCountingDown = false;
   bool isLoadingScore = false;
+  bool isArmingCapturePipeline = false;
+  int countdownSecondsRemaining = 0;
   int currentPageIndex = 0;
   String? lastErrorMessage;
+
+  /// Frame index captured when Start was pressed; re-applied at countdown 0
+  /// so ambient audio during the pre-roll cannot leave the DTW mid-score.
+  double resumeFrameIndex = 0.0;
 
   ScoreFollowerEngine? engine;
   StreamSubscription<Uint8List>? audioStreamSubscription;
   Isolate? audioPushIsolate;
   Timer? uiPollingTimer;
+  Timer? countdownTimer;
+  bool capturePipelineReady = false;
+
+  static const int preRollCountdownSeconds = 2;
 
   TrackingMode get trackingMode => sessionConfig.trackingMode;
 
-  bool get canNavigateManually => !isRunning && scoreDocument != null;
+  /// True while counting down or actively tracking (mic owned, nav gated).
+  bool get isSessionActive => isCountingDown || isRunning;
+
+  bool get canNavigateManually => !isSessionActive && scoreDocument != null;
 
   /// Loads [sessionConfig.scoreId] from assets, creates/recreates the
   /// native engine, applies tracking mode, and seeks to frame 0.
@@ -106,121 +120,204 @@ final class FollowingSessionController extends ChangeNotifier {
     liveEngine.setStrictConfidenceThreshold(sessionConfig.strictConfidenceThreshold);
   }
 
+  /// Arms the capture pipeline and begins a [preRollCountdownSeconds]
+  /// countdown so the performer can prepare. Live cursor tracking starts
+  /// only when the countdown reaches zero and the mic/isolate are ready.
   Future<void> start() async {
-    if (isRunning) {
+    if (isSessionActive || isArmingCapturePipeline) {
       return;
     }
     lastErrorMessage = null;
+    resumeFrameIndex = cursorDisplayModel.displayedFrameIndex;
+    capturePipelineReady = false;
+    isCountingDown = true;
+    countdownSecondsRemaining = preRollCountdownSeconds;
+    isArmingCapturePipeline = true;
     notifyListeners();
 
-    Isolate? createdIsolate;
-    StreamSubscription<Uint8List>? createdSubscription;
-    Timer? createdPollingTimer;
+    countdownTimer?.cancel();
+    countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (countdownSecondsRemaining <= 1) {
+        countdownTimer?.cancel();
+        countdownTimer = null;
+        countdownSecondsRemaining = 0;
+        notifyListeners();
+        tryBeginLiveTracking();
+        return;
+      }
+      countdownSecondsRemaining -= 1;
+      notifyListeners();
+    });
 
     try {
-      if (scoreDocument == null) {
-        await loadScore();
-      }
-      final document = scoreDocument;
-      if (document == null) {
-        throw StateError('No score document loaded.');
-      }
-
-      if (!await audioRecorder.hasPermission()) {
-        throw StateError('Microphone permission was denied.');
-      }
-
-      ensureEngineLoaded(document);
-      applyTrackingModeToEngineAndCursor();
-      final liveEngine = engine!;
-      // Resume from the UI's authoritative cursor frame (tap/scrub/stop position).
-      liveEngine.seekToReferenceFrame(cursorDisplayModel.displayedFrameIndex);
-      // Seed Fixed Tempo clock from the current seek/display position.
-      cursorDisplayModel.snapToFrameIndex(cursorDisplayModel.displayedFrameIndex);
-
-      final pushIsolateReadyPort = ReceivePort();
-      createdIsolate = await Isolate.spawn(
-        audioPushIsolateEntryPoint,
-        AudioPushIsolateStartupMessage(
-          readyPort: pushIsolateReadyPort.sendPort,
-          channelDescriptor: liveEngine.audioPushChannel,
-        ),
-      );
-      final audioPushSendPort = await pushIsolateReadyPort.first as SendPort;
-      pushIsolateReadyPort.close();
-
-      final audioStream = await audioRecorder.startStream(
-        RecordConfig(
-          encoder: AudioEncoder.pcm16bits,
-          sampleRate: document.sampleRateHz.toInt(),
-          numChannels: 1,
-        ),
-      );
-      createdSubscription = audioStream.listen(audioPushSendPort.send);
-
-      createdPollingTimer = Timer.periodic(const Duration(milliseconds: 33), (_) {
-        final pollingEngine = engine;
-        if (pollingEngine == null) {
-          return;
-        }
-        final position = pollingEngine.getCurrentAlignmentPosition();
-        alignmentSnapshot.value = AlignmentSnapshot(
-          position: position,
-          polledAt: DateTime.now(),
-        );
-        cursorDisplayModel.updateCursorHealth(
-          alignmentConfidence: position.alignmentConfidence,
-          sessionIsRunning: true,
-        );
-
-        // Rubato / Strict drive the cursor from DSP; Fixed Tempo ignores
-        // the frame index for motion but still polls confidence above.
-        if (sessionConfig.trackingMode != TrackingMode.fixedTempo) {
-          cursorDisplayModel.setTargetFrameIndex(position.referenceFrameIndex);
-          final mappedPage =
-              timelineMapper.mapFrameIndex(document, position.referenceFrameIndex).pageIndex;
-          if (mappedPage != currentPageIndex) {
-            currentPageIndex = mappedPage;
-            notifyListeners();
-          }
-        } else {
-          final mappedPage = timelineMapper
-              .mapFrameIndex(document, cursorDisplayModel.targetFrameIndex)
-              .pageIndex;
-          if (mappedPage != currentPageIndex) {
-            currentPageIndex = mappedPage;
-            notifyListeners();
-          }
-        }
-      });
-
-      audioPushIsolate = createdIsolate;
-      audioStreamSubscription = createdSubscription;
-      uiPollingTimer = createdPollingTimer;
-      isRunning = true;
-      cursorDisplayModel.start();
+      await armCapturePipeline();
+      capturePipelineReady = true;
+      isArmingCapturePipeline = false;
       notifyListeners();
+      tryBeginLiveTracking();
     } catch (error) {
-      createdPollingTimer?.cancel();
-      await createdSubscription?.cancel();
-      createdIsolate?.kill(priority: Isolate.immediate);
-      if (await audioRecorder.isRecording()) {
-        await audioRecorder.stop();
-      }
+      isArmingCapturePipeline = false;
+      await cancelPreRollAndPipeline();
       lastErrorMessage = error.toString();
-      isRunning = false;
       notifyListeners();
     }
   }
 
-  Future<void> stop() async {
+  /// Opens mic + push isolate + poll timer, but does not start the cursor
+  /// clock or treat DSP frames as live tracking targets yet. Starting the
+  /// OS audio device during the countdown removes device-open latency from
+  /// the critical path at countdown zero.
+  Future<void> armCapturePipeline() async {
+    if (scoreDocument == null) {
+      await loadScore();
+    }
+    final document = scoreDocument;
+    if (document == null) {
+      throw StateError('No score document loaded.');
+    }
+
+    if (!await audioRecorder.hasPermission()) {
+      throw StateError('Microphone permission was denied.');
+    }
+
+    ensureEngineLoaded(document);
+    applyTrackingModeToEngineAndCursor();
+    final liveEngine = engine!;
+    liveEngine.seekToReferenceFrame(resumeFrameIndex);
+    cursorDisplayModel.snapToFrameIndex(resumeFrameIndex);
+
+    final pushIsolateReadyPort = ReceivePort();
+    final createdIsolate = await Isolate.spawn(
+      audioPushIsolateEntryPoint,
+      AudioPushIsolateStartupMessage(
+        readyPort: pushIsolateReadyPort.sendPort,
+        channelDescriptor: liveEngine.audioPushChannel,
+      ),
+    );
+    final audioPushSendPort = await pushIsolateReadyPort.first as SendPort;
+    pushIsolateReadyPort.close();
+
+    final audioStream = await audioRecorder.startStream(
+      RecordConfig(
+        encoder: AudioEncoder.pcm16bits,
+        sampleRate: document.sampleRateHz.toInt(),
+        numChannels: 1,
+        // Prefer the lowest practical buffer so the first post-countdown
+        // chroma arrives promptly once the hop-primed CQT emits.
+        autoGain: false,
+        echoCancel: false,
+        noiseSuppress: false,
+      ),
+    );
+    final createdSubscription = audioStream.listen(audioPushSendPort.send);
+
+    final createdPollingTimer = Timer.periodic(const Duration(milliseconds: 33), (_) {
+      onAlignmentPollTick(document);
+    });
+
+    audioPushIsolate = createdIsolate;
+    audioStreamSubscription = createdSubscription;
+    uiPollingTimer = createdPollingTimer;
+  }
+
+  void onAlignmentPollTick(ScoreDocument document) {
+    final pollingEngine = engine;
+    if (pollingEngine == null) {
+      return;
+    }
+    final position = pollingEngine.getCurrentAlignmentPosition();
+    alignmentSnapshot.value = AlignmentSnapshot(
+      position: position,
+      polledAt: DateTime.now(),
+    );
+
+    // During the pre-roll countdown the mic is already feeding the DSP so
+    // the CQT history and OS capture path are warm, but the cursor must not
+    // follow ambient noise or Fixed Tempo wall-clock yet.
+    if (!isRunning) {
+      return;
+    }
+
+    cursorDisplayModel.updateCursorHealth(
+      alignmentConfidence: position.alignmentConfidence,
+      sessionIsRunning: true,
+    );
+
+    if (sessionConfig.trackingMode != TrackingMode.fixedTempo) {
+      cursorDisplayModel.setTargetFrameIndex(position.referenceFrameIndex);
+      final mappedPage =
+          timelineMapper.mapFrameIndex(document, position.referenceFrameIndex).pageIndex;
+      if (mappedPage != currentPageIndex) {
+        currentPageIndex = mappedPage;
+        notifyListeners();
+      }
+    } else {
+      final mappedPage = timelineMapper
+          .mapFrameIndex(document, cursorDisplayModel.targetFrameIndex)
+          .pageIndex;
+      if (mappedPage != currentPageIndex) {
+        currentPageIndex = mappedPage;
+        notifyListeners();
+      }
+    }
+  }
+
+  /// Transitions from pre-roll to live tracking once both the countdown has
+  /// elapsed and the capture pipeline is armed.
+  void tryBeginLiveTracking() {
+    if (isRunning) {
+      return;
+    }
+    if (countdownSecondsRemaining > 0) {
+      return;
+    }
+    if (!capturePipelineReady) {
+      return;
+    }
+
+    final liveEngine = engine;
+    if (liveEngine == null) {
+      return;
+    }
+
+    // Clear any DTW path formed by ambient audio during the countdown and
+    // re-seed the feature extractor; with hop-timed zero-padded CQT the
+    // first live chroma arrives within one hop (~23 ms), not seconds.
+    liveEngine.seekToReferenceFrame(resumeFrameIndex);
+    cursorDisplayModel.snapToFrameIndex(resumeFrameIndex);
+    alignmentSnapshot.value = AlignmentSnapshot(
+      position: ScoreFollowerAlignmentPosition(
+        referenceFrameIndex: resumeFrameIndex,
+        alignmentConfidence: 0.0,
+        cumulativeDistortionCost: 0.0,
+      ),
+      polledAt: DateTime.now(),
+    );
+
+    isCountingDown = false;
+    isRunning = true;
+    cursorDisplayModel.start();
+    notifyListeners();
+  }
+
+  Future<void> cancelPreRollAndPipeline() async {
+    countdownTimer?.cancel();
+    countdownTimer = null;
+    isCountingDown = false;
+    countdownSecondsRemaining = 0;
+    capturePipelineReady = false;
+    isArmingCapturePipeline = false;
     await tearDownCapturePipeline();
     cursorDisplayModel.stop();
+    isRunning = false;
+  }
+
+  Future<void> stop() async {
+    await cancelPreRollAndPipeline();
     cursorDisplayModel.updateCursorHealth(
       alignmentConfidence: alignmentSnapshot.value.alignmentConfidence,
       sessionIsRunning: false,
     );
-    isRunning = false;
     // Keep engine and cursor/seek position; do not zero the diagnostics strip
     // to the zero frame — leave the last known / sought position visible.
     notifyListeners();
@@ -374,10 +471,13 @@ final class FollowingSessionController extends ChangeNotifier {
 
   @override
   void dispose() {
+    countdownTimer?.cancel();
+    countdownTimer = null;
     unawaited(tearDownCapturePipeline());
     destroyEngine();
     cursorDisplayModel.stop();
     isRunning = false;
+    isCountingDown = false;
     unawaited(() async {
       if (await audioRecorder.isRecording()) {
         await audioRecorder.stop();
@@ -401,14 +501,39 @@ final class AudioPushIsolateStartupMessage {
 }
 
 /// Background-isolate entry: sole writer of PCM16 audio into the native engine.
+///
+/// Coalesces capture chunks onto a short timer so a slow native CQT hop cannot
+/// leave an unbounded `ReceivePort` backlog (the failure mode behind Windows
+/// "Not Responding" freezes under Fixed Tempo / sustained mic load). Only the
+/// newest chunk present at each tick is pushed; intermediate audio is shed.
 void audioPushIsolateEntryPoint(AudioPushIsolateStartupMessage startupMessage) {
   final audioPushChannel = ScoreFollowerAudioPushChannel(startupMessage.channelDescriptor);
   final audioChunkReceivePort = ReceivePort();
   startupMessage.readyPort.send(audioChunkReceivePort.sendPort);
 
+  Uint8List? latestPcm16Chunk;
+  var isPushInFlight = false;
+
   audioChunkReceivePort.listen((message) {
     if (message is Uint8List) {
-      audioPushChannel.pushPcm16Frame(message);
+      latestPcm16Chunk = message;
+    }
+  });
+
+  Timer.periodic(const Duration(milliseconds: 20), (_) {
+    if (isPushInFlight) {
+      return;
+    }
+    final chunk = latestPcm16Chunk;
+    if (chunk == null) {
+      return;
+    }
+    latestPcm16Chunk = null;
+    isPushInFlight = true;
+    try {
+      audioPushChannel.pushPcm16Frame(chunk);
+    } finally {
+      isPushInFlight = false;
     }
   });
 }

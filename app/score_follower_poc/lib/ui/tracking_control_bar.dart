@@ -6,6 +6,7 @@ class TrackingControlBar extends StatelessWidget {
   const TrackingControlBar({
     super.key,
     required this.isRunning,
+    required this.isCountingDown,
     required this.canNavigateManually,
     required this.canGoPrevious,
     required this.canGoNext,
@@ -16,6 +17,7 @@ class TrackingControlBar extends StatelessWidget {
   });
 
   final bool isRunning;
+  final bool isCountingDown;
   final bool canNavigateManually;
   final bool canGoPrevious;
   final bool canGoNext;
@@ -26,6 +28,13 @@ class TrackingControlBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final startStopLabel = isCountingDown
+        ? 'Cancel'
+        : (isRunning ? 'Stop' : (isLoading ? 'Loading…' : 'Start'));
+    final startStopIcon = isCountingDown
+        ? Icons.close
+        : (isRunning ? Icons.stop : Icons.play_arrow);
+
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16.0, 8.0, 16.0, 16.0),
@@ -39,8 +48,8 @@ class TrackingControlBar extends StatelessWidget {
             ),
             FilledButton.icon(
               onPressed: isLoading ? null : onStartStop,
-              icon: Icon(isRunning ? Icons.stop : Icons.play_arrow),
-              label: Text(isRunning ? 'Stop' : (isLoading ? 'Loading…' : 'Start')),
+              icon: Icon(startStopIcon),
+              label: Text(startStopLabel),
             ),
             IconButton.filledTonal(
               onPressed: canNavigateManually && canGoNext ? onNext : null,

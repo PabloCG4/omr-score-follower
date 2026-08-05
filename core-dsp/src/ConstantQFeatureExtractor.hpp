@@ -11,6 +11,7 @@
 
 #include <complex>
 #include <cstddef>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -32,6 +33,13 @@ public:
     void reset() override;
 
 private:
+    // Inclusive spectral support of one kernel, used to replace the former
+    // O(transformLength) dense correlation with a narrowband multiply-add.
+    struct KernelSparseBand {
+        std::size_t beginBin = 0;
+        std::size_t endBinExclusive = 0;
+    };
+
     // Precomputed analysis state for one Constant-Q octave, built once in
     // configure() and read-only thereafter until the next configure()/reset().
     struct OctaveAnalysisState {
@@ -39,6 +47,7 @@ private:
         // kernelSpectraByBin[binWithinOctave] is the transformLength-sized
         // spectrum of that bin's Hann-windowed complex exponential kernel.
         std::vector<std::vector<std::complex<float>>> kernelSpectraByBin;
+        std::vector<KernelSparseBand> kernelSparseBandsByBin;
         // Reused every analysis hop; sized once here to keep ingestAudioFrame
         // allocation-free.
         std::vector<float> audioSegmentScratch;
@@ -46,7 +55,9 @@ private:
     };
 
     void buildOctaveKernelBank(std::size_t octaveIndex, OctaveAnalysisState& octaveState);
-    void computeAndAppendAnalysisFrame();
+    void computeAndEnqueueAnalysisFrame();
+    void enqueuePendingChroma(const ChromaVector& chromaVector);
+    static KernelSparseBand computeSparseBand(const std::vector<std::complex<float>>& kernelSpectrum);
     static void foldMagnitudesIntoChromaVector(const std::vector<float>& allBinMagnitudes,
                                                 std::size_t binsPerOctave,
                                                 ChromaVector& outputChromaVector);
@@ -64,7 +75,9 @@ private:
     std::size_t samplesAccountedForByAnalysisFrames = 0;
 
     Chromagram accumulatedChromagram{};
-    std::optional<ChromaVector> pendingChromaVector;
+    // Bounded FIFO so multi-hop ingest calls deliver every completed frame to
+    // the alignment engine instead of silently overwriting a single slot.
+    std::deque<ChromaVector> pendingChromaFrames;
 };
 
 }  // namespace scorefollower::dsp

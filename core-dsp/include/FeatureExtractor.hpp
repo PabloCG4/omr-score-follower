@@ -35,10 +35,24 @@ struct FeatureExtractionConfiguration {
     double tuningOffsetSemitones = 0.0;
 
     // Safety ceiling on the FFT size computed for the lowest analysis
-    // octave. Guards against pathological memory and CPU usage if
-    // constantQMinimumFrequencyHz is configured unreasonably low or
-    // constantQBinsPerOctave unreasonably high; must be a power of two.
-    std::size_t maximumTransformLength = 65536;
+    // octave. Must be a power of two. The live mobile default is 8192
+    // (~370 ms at 22050 Hz): a 65536-point dense CQT per hop is not
+    // sustainable in real time on mobile/desktop UI hosts and was the
+    // primary cause of "Not Responding" freezes under microphone load.
+    // Offline validators may raise this for research-grade low-frequency
+    // resolution.
+    std::size_t maximumTransformLength = 8192;
+
+    // When true, every completed analysis hop is appended to the extractor's
+    // accumulated chromagram (offline / validator use). Live score-following
+    // leaves this false so a multi-minute performance cannot grow an
+    // unbounded std::vector on the audio path.
+    bool accumulateChromagramFrames = false;
+
+    // Bounded FIFO of chroma frames waiting for pollLatestChromaVector.
+    // Prevents silent frame loss when several hops complete inside one
+    // ingestAudioFrame call, while capping memory if the consumer stalls.
+    std::size_t maxPendingChromaFrames = 8;
 };
 
 // Interface implemented by the concrete DSP pipeline that turns a stream of

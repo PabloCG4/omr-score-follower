@@ -232,21 +232,46 @@ final class CursorDisplayModel extends ChangeNotifier {
       return;
     }
 
-    final alpha = 1.0 - math.exp(-deltaSeconds / chaseTimeConstantSeconds);
-    displayedFrameIndex += (targetFrameIndex - displayedFrameIndex) * alpha;
+    // Fixed Tempo advances every vsync; chasing with the full tau would
+    // rewrite xNorm every frame and flood overlay rebuilds. Snap display to
+    // target in Fixed Tempo so motion stays smooth without 60 Hz notify spam
+    // from sub-epsilon chase residuals.
+    if (trackingMode == TrackingMode.fixedTempo) {
+      displayedFrameIndex = targetFrameIndex;
+    } else {
+      final alpha = 1.0 - math.exp(-deltaSeconds / chaseTimeConstantSeconds);
+      displayedFrameIndex += (targetFrameIndex - displayedFrameIndex) * alpha;
+    }
+
     final newPose = mapper.mapFrameIndex(document, displayedFrameIndex);
-    if (newPose != displayedPose) {
+    final poseChangedVisually =
+        newPose.pageIndex != displayedPose.pageIndex ||
+        (newPose.xNorm - displayedPose.xNorm).abs() >= poseNotifyEpsilonNorm ||
+        (newPose.yNorm - displayedPose.yNorm).abs() >= poseNotifyEpsilonNorm;
+    if (poseChangedVisually) {
       displayedPose = newPose;
       notifyListeners();
     }
 
-    // Pulse waitingStrict by notifying each tick so opacity can animate.
+    // Pulse waitingStrict at a capped rate so opacity animates without a
+    // notify on every vsync when the pose is stationary.
     if (cursorHealth == CursorHealth.waitingStrict) {
-      notifyListeners();
+      secondsSinceLastPulseNotify += deltaSeconds;
+      if (secondsSinceLastPulseNotify >= pulseNotifyIntervalSeconds) {
+        secondsSinceLastPulseNotify = 0.0;
+        notifyListeners();
+      }
     }
   }
 
   Duration? lastElapsed;
+  double secondsSinceLastPulseNotify = 0.0;
+
+  /// Minimum normalized pose delta that warrants an overlay rebuild.
+  static const double poseNotifyEpsilonNorm = 5e-4;
+
+  /// Cap Strict wait pulse rebuilds (~20 Hz).
+  static const double pulseNotifyIntervalSeconds = 0.05;
 
   /// 0..1 phase for waitingStrict opacity pulse, driven by the vsync ticker.
   double get pulsePhase {

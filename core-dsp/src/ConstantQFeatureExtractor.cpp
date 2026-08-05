@@ -112,14 +112,17 @@ void ConstantQFeatureExtractor::configure(const FeatureExtractionConfiguration& 
 
     totalSamplesIngested = 0;
     samplesAccountedForByAnalysisFrames = 0;
-    pendingChromaVector.reset();
+    pendingChromaFrames.clear();
 
     accumulatedChromagram = Chromagram{};
     accumulatedChromagram.sampleRateHz = configuration.sampleRateHz;
     accumulatedChromagram.hopLengthSamples = configuration.hopLengthSamples;
-    const double framesPerSecond = configuration.sampleRateHz / static_cast<double>(configuration.hopLengthSamples);
-    accumulatedChromagram.frames.reserve(
-        static_cast<std::size_t>(framesPerSecond * ReservedChromagramDurationSeconds));
+    if (configuration.accumulateChromagramFrames) {
+        const double framesPerSecond =
+            configuration.sampleRateHz / static_cast<double>(configuration.hopLengthSamples);
+        accumulatedChromagram.frames.reserve(
+            static_cast<std::size_t>(framesPerSecond * ReservedChromagramDurationSeconds));
+    }
 }
 
 void ConstantQFeatureExtractor::buildOctaveKernelBank(std::size_t octaveIndex, OctaveAnalysisState& octaveState) {
@@ -144,6 +147,7 @@ void ConstantQFeatureExtractor::buildOctaveKernelBank(std::size_t octaveIndex, O
     octaveState.transformLength = transformLength;
     octaveState.kernelSpectraByBin.assign(binsPerOctave,
                                            std::vector<std::complex<float>>(transformLength, std::complex<float>(0.0F, 0.0F)));
+    octaveState.kernelSparseBandsByBin.assign(binsPerOctave, KernelSparseBand{});
     octaveState.audioSegmentScratch.assign(transformLength, 0.0F);
     octaveState.audioSpectrumScratch.assign(transformLength, std::complex<float>(0.0F, 0.0F));
 
@@ -180,6 +184,8 @@ void ConstantQFeatureExtractor::buildOctaveKernelBank(std::size_t octaveIndex, O
 
         spectralBackend->forwardTransformComplex(paddedKernelScratch.data(), octaveState.kernelSpectraByBin[binWithinOctave].data(),
                                                   transformLength);
+        octaveState.kernelSparseBandsByBin[binWithinOctave] =
+            computeSparseBand(octaveState.kernelSpectraByBin[binWithinOctave]);
     }
 }
 
@@ -188,22 +194,96 @@ void ConstantQFeatureExtractor::ingestAudioFrame(const float* audioSamples, std:
         throw std::logic_error("ConstantQFeatureExtractor::ingestAudioFrame called before configure().");
     }
 
+    const std::size_t hopLengthSamples = configuration.hopLengthSamples;
+    if (hopLengthSamples == 0) {
+        return;
+    }
+
+    // Count how many hop boundaries this chunk will cross so a pathological
+    // backlog (large OS audio buffers after a stall) can shed intermediate
+    // analysis work and keep only the newest hops — the real-time policy
+    // required to avoid multi-second CQT storms that freeze the host UI.
+    std::size_t hopsInThisChunk = 0;
+    {
+        std::size_t projectedIngested = totalSamplesIngested;
+        std::size_t projectedAccounted = samplesAccountedForByAnalysisFrames;
+        for (std::size_t sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
+            ++projectedIngested;
+            if ((projectedIngested - projectedAccounted) >= hopLengthSamples) {
+                ++hopsInThisChunk;
+                projectedAccounted += hopLengthSamples;
+            }
+        }
+    }
+    const std::size_t maxHopsToCompute =
+        std::max<std::size_t>(1, configuration.maxPendingChromaFrames);
+    const std::size_t hopsToSkip =
+        (hopsInThisChunk > maxHopsToCompute) ? (hopsInThisChunk - maxHopsToCompute) : 0;
+    std::size_t hopsSkipped = 0;
+
     for (std::size_t sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
         audioHistory.pushSample(audioSamples[sampleIndex]);
         ++totalSamplesIngested;
 
-        const bool historyFullyPrimed = audioHistory.getAvailableSampleCount() >= audioHistory.getCapacity();
         const bool hopBoundaryReached =
-            (totalSamplesIngested - samplesAccountedForByAnalysisFrames) >= configuration.hopLengthSamples;
+            (totalSamplesIngested - samplesAccountedForByAnalysisFrames) >= hopLengthSamples;
 
-        if (historyFullyPrimed && hopBoundaryReached) {
-            computeAndAppendAnalysisFrame();
-            samplesAccountedForByAnalysisFrames += configuration.hopLengthSamples;
+        if (!hopBoundaryReached) {
+            continue;
         }
+
+        samplesAccountedForByAnalysisFrames += hopLengthSamples;
+        if (hopsSkipped < hopsToSkip) {
+            ++hopsSkipped;
+            continue;
+        }
+        computeAndEnqueueAnalysisFrame();
     }
 }
 
-void ConstantQFeatureExtractor::computeAndAppendAnalysisFrame() {
+ConstantQFeatureExtractor::KernelSparseBand ConstantQFeatureExtractor::computeSparseBand(
+    const std::vector<std::complex<float>>& kernelSpectrum) {
+    KernelSparseBand band{};
+    if (kernelSpectrum.empty()) {
+        return band;
+    }
+
+    std::size_t peakBin = 0;
+    float peakMagnitude = 0.0F;
+    for (std::size_t binIndex = 0; binIndex < kernelSpectrum.size(); ++binIndex) {
+        const float magnitude = std::abs(kernelSpectrum[binIndex]);
+        if (magnitude > peakMagnitude) {
+            peakMagnitude = magnitude;
+            peakBin = binIndex;
+        }
+    }
+
+    if (peakMagnitude < 1e-12F) {
+        band.beginBin = 0;
+        band.endBinExclusive = kernelSpectrum.size();
+        return band;
+    }
+
+    // Retain bins at or above 1% of the peak magnitude. Constant-Q kernels are
+    // narrowband, so this typically collapses a 8192-bin multiply to a few
+    // dozen complex products per pitch-class bin.
+    constexpr float relativeThreshold = 0.01F;
+    const float magnitudeThreshold = peakMagnitude * relativeThreshold;
+    std::size_t beginBin = peakBin;
+    std::size_t endBinExclusive = peakBin + 1;
+    while (beginBin > 0 && std::abs(kernelSpectrum[beginBin - 1]) >= magnitudeThreshold) {
+        --beginBin;
+    }
+    while (endBinExclusive < kernelSpectrum.size() &&
+           std::abs(kernelSpectrum[endBinExclusive]) >= magnitudeThreshold) {
+        ++endBinExclusive;
+    }
+    band.beginBin = beginBin;
+    band.endBinExclusive = endBinExclusive;
+    return band;
+}
+
+void ConstantQFeatureExtractor::computeAndEnqueueAnalysisFrame() {
     const std::size_t binsPerOctave = configuration.constantQBinsPerOctave;
 
     for (std::size_t octaveIndex = 0; octaveIndex < octaveStates.size(); ++octaveIndex) {
@@ -213,26 +293,40 @@ void ConstantQFeatureExtractor::computeAndAppendAnalysisFrame() {
         spectralBackend->forwardTransform(octaveState.audioSegmentScratch.data(), octaveState.audioSpectrumScratch.data(),
                                            octaveState.transformLength);
 
-        const double inverseTransformLength = 1.0 / static_cast<double>(octaveState.transformLength);
+        const float inverseTransformLength = 1.0F / static_cast<float>(octaveState.transformLength);
         for (std::size_t binWithinOctave = 0; binWithinOctave < binsPerOctave; ++binWithinOctave) {
-            const std::vector<std::complex<float>>& kernelSpectrum = octaveState.kernelSpectraByBin[binWithinOctave];
+            const std::vector<std::complex<float>>& kernelSpectrum =
+                octaveState.kernelSpectraByBin[binWithinOctave];
+            const KernelSparseBand& sparseBand = octaveState.kernelSparseBandsByBin[binWithinOctave];
 
-            std::complex<double> correlationAccumulator(0.0, 0.0);
-            for (std::size_t frequencyBin = 0; frequencyBin < octaveState.transformLength; ++frequencyBin) {
-                correlationAccumulator += static_cast<std::complex<double>>(octaveState.audioSpectrumScratch[frequencyBin]) *
-                                           std::conj(static_cast<std::complex<double>>(kernelSpectrum[frequencyBin]));
+            std::complex<float> correlationAccumulator(0.0F, 0.0F);
+            for (std::size_t frequencyBin = sparseBand.beginBin; frequencyBin < sparseBand.endBinExclusive;
+                 ++frequencyBin) {
+                correlationAccumulator += octaveState.audioSpectrumScratch[frequencyBin] *
+                                           std::conj(kernelSpectrum[frequencyBin]);
             }
 
-            const double constantQMagnitude = std::abs(correlationAccumulator) * inverseTransformLength;
-            binMagnitudeScratch[octaveIndex * binsPerOctave + binWithinOctave] = static_cast<float>(constantQMagnitude);
+            const float constantQMagnitude = std::abs(correlationAccumulator) * inverseTransformLength;
+            binMagnitudeScratch[octaveIndex * binsPerOctave + binWithinOctave] = constantQMagnitude;
         }
     }
 
     ChromaVector chromaVector{};
     foldMagnitudesIntoChromaVector(binMagnitudeScratch, binsPerOctave, chromaVector);
+    enqueuePendingChroma(chromaVector);
 
-    pendingChromaVector = chromaVector;
-    accumulatedChromagram.frames.push_back(chromaVector);
+    if (configuration.accumulateChromagramFrames) {
+        accumulatedChromagram.frames.push_back(chromaVector);
+    }
+}
+
+void ConstantQFeatureExtractor::enqueuePendingChroma(const ChromaVector& chromaVector) {
+    const std::size_t maxPending =
+        std::max<std::size_t>(1, configuration.maxPendingChromaFrames);
+    while (pendingChromaFrames.size() >= maxPending) {
+        pendingChromaFrames.pop_front();
+    }
+    pendingChromaFrames.push_back(chromaVector);
 }
 
 void ConstantQFeatureExtractor::foldMagnitudesIntoChromaVector(const std::vector<float>& allBinMagnitudes,
@@ -262,11 +356,11 @@ void ConstantQFeatureExtractor::foldMagnitudesIntoChromaVector(const std::vector
 }
 
 std::optional<ChromaVector> ConstantQFeatureExtractor::pollLatestChromaVector() {
-    if (!pendingChromaVector.has_value()) {
+    if (pendingChromaFrames.empty()) {
         return std::nullopt;
     }
-    const ChromaVector result = *pendingChromaVector;
-    pendingChromaVector.reset();
+    const ChromaVector result = pendingChromaFrames.front();
+    pendingChromaFrames.pop_front();
     return result;
 }
 
@@ -279,7 +373,7 @@ void ConstantQFeatureExtractor::reset() {
     std::fill(binMagnitudeScratch.begin(), binMagnitudeScratch.end(), 0.0F);
     totalSamplesIngested = 0;
     samplesAccountedForByAnalysisFrames = 0;
-    pendingChromaVector.reset();
+    pendingChromaFrames.clear();
     accumulatedChromagram.frames.clear();
 }
 

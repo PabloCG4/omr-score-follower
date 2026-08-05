@@ -303,10 +303,11 @@ int main(int argumentCount, char** argumentValues) {
     scorefollower::dsp::FeatureExtractionConfiguration configuration;
     configuration.sampleRateHz = static_cast<double>(decodedAudio.sampleRateHz);
     configuration.hopLengthSamples = 512;
-    // The remaining fields (Constant-Q bin resolution, octave count, minimum
-    // frequency) intentionally keep their production defaults, so this tool
-    // validates the same pipeline configuration the mobile application will
-    // actually run, not a scaled-down test configuration.
+    // Offline validator: retain every hop for the printed table, and allow the
+    // full research-grade FFT ceiling. The live mobile path uses the tighter
+    // defaults in FeatureExtractionConfiguration.
+    configuration.accumulateChromagramFrames = true;
+    configuration.maximumTransformLength = 65536;
 
     const std::unique_ptr<scorefollower::dsp::FeatureExtractor> featureExtractor =
         scorefollower::dsp::createConstantQFeatureExtractor();

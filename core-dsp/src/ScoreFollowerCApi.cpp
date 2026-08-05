@@ -56,6 +56,12 @@ ScoreFollowerEngine* score_follower_create(double sample_rate_hz, size_t hop_len
         FeatureExtractionConfiguration configuration;
         configuration.sampleRateHz = sample_rate_hz;
         configuration.hopLengthSamples = hop_length_samples;
+        // Live FFI path: keep the mobile real-time defaults (8192-point CQT
+        // ceiling, no unbounded chromagram accumulation). Offline validators
+        // override these when they configure a FeatureExtractor directly.
+        configuration.maximumTransformLength = 8192;
+        configuration.accumulateChromagramFrames = false;
+        configuration.maxPendingChromaFrames = 8;
         engine->featureExtractor->configure(configuration);
 
         return engine.release();

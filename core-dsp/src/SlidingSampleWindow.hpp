@@ -48,8 +48,36 @@ public:
     // Copies the most recent sampleCount samples, in chronological order
     // (oldest of the requested range first), into destination, which must
     // have room for at least sampleCount floats. sampleCount must not
-    // exceed getAvailableSampleCount(). Performs no allocation.
+    // exceed getCapacity(). When fewer than sampleCount samples have been
+    // written yet, the leading (oldest) portion is zero-padded so callers
+    // can run FFT-sized analysis from the first hop without waiting for the
+    // full Constant-Q history to fill (which can be several seconds at low
+    // analysis frequencies). Performs no allocation.
     void copyMostRecentSamples(std::size_t sampleCount, float* destination) const noexcept {
+        if (sampleCount == 0 || capacity == 0) {
+            return;
+        }
+        if (sampleCount > capacity) {
+            sampleCount = capacity;
+        }
+
+        const std::size_t available = samplesWrittenSoFar;
+        if (sampleCount > available) {
+            const std::size_t padCount = sampleCount - available;
+            for (std::size_t padIndex = 0; padIndex < padCount; ++padIndex) {
+                destination[padIndex] = 0.0F;
+            }
+            if (available == 0) {
+                return;
+            }
+            std::size_t readIndex = (writeHeadIndex + capacity - available) % capacity;
+            for (std::size_t sampleIndex = 0; sampleIndex < available; ++sampleIndex) {
+                destination[padCount + sampleIndex] = storage[readIndex];
+                readIndex = (readIndex + 1) % capacity;
+            }
+            return;
+        }
+
         std::size_t readIndex = (writeHeadIndex + capacity - sampleCount) % capacity;
         for (std::size_t index = 0; index < sampleCount; ++index) {
             destination[index] = storage[readIndex];
