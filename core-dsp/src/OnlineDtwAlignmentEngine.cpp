@@ -163,6 +163,14 @@ void OnlineDtwAlignmentEngine::ingestLiveChromaVector(const ChromaVector& liveCh
 
     const std::size_t activeWindowWidth = std::min(windowWidthFrames, referenceFrameCount - windowStartReferenceIndex);
 
+    // While Strict is already below threshold, disallow skip so the path
+    // cannot walk forward on noise; stall (or diagonal match) remains viable.
+    const double previousPublishedConfidence =
+        publishedAlignmentConfidence.load(std::memory_order_relaxed);
+    const bool strictSkipDisallowed =
+        (trackingMode == TrackingMode::Strict) &&
+        (previousPublishedConfidence < strictConfidenceThreshold);
+
     double bestCostInRow = PositiveInfinity;
     std::size_t bestRelativeIndex = 0;
     double bestLocalDistance = 0.0;
@@ -199,6 +207,10 @@ void OnlineDtwAlignmentEngine::ingestLiveChromaVector(const ChromaVector& liveCh
                     static_cast<double>(consecutiveSkipFrames - maxRunLengthFrames + 1) * runLengthEscalationPenalty;
             }
 
+            if (strictSkipDisallowed) {
+                skipPredecessor = PositiveInfinity;
+            }
+
             accumulatedCost = localDistance + std::min({diagonalPredecessor, stallPredecessor, skipPredecessor});
         }
 
@@ -212,38 +224,54 @@ void OnlineDtwAlignmentEngine::ingestLiveChromaVector(const ChromaVector& liveCh
 
     const std::size_t jBestAbsolute = windowStartReferenceIndex + bestRelativeIndex;
 
-    if (hasIngestedFirstFrame) {
-        const std::size_t advance = (jBestAbsolute >= currentBestReferenceIndexAbsolute)
-                                         ? (jBestAbsolute - currentBestReferenceIndexAbsolute)
-                                         : 0;
-        consecutiveStallFrames = (advance == 0) ? (consecutiveStallFrames + 1) : 0;
-        consecutiveSkipFrames = (advance > maxPlausibleSkipPerFrame) ? (consecutiveSkipFrames + 1) : 0;
-    } else {
-        consecutiveStallFrames = 0;
-        consecutiveSkipFrames = 0;
-    }
-    currentBestReferenceIndexAbsolute = jBestAbsolute;
-    hasIngestedFirstFrame = true;
-
     emaLocalDistance = hasEmaLocalDistance ? (confidenceSmoothingFactor * bestLocalDistance +
                                                (1.0 - confidenceSmoothingFactor) * emaLocalDistance)
                                             : bestLocalDistance;
     hasEmaLocalDistance = true;
     const double alignmentConfidence = std::clamp(1.0 - emaLocalDistance, 0.0, 1.0);
 
-    publishAlignmentPosition(static_cast<double>(jBestAbsolute), alignmentConfidence, bestCostInRow);
+    // Strict gate: keep ingesting and publishing confidence, but freeze the
+    // published reference index and refuse to slide the DTW window so the
+    // band stays anchored on the expected note until match quality recovers.
+    const bool strictGateActive =
+        (trackingMode == TrackingMode::Strict) && (alignmentConfidence < strictConfidenceThreshold);
 
-    // Slide the window forward once the best-matching column has advanced
-    // close enough to the trailing edge that continued progress would soon
-    // run off the end of the currently retained band.
-    constexpr std::size_t slideThresholdFrames = 20;
-    constexpr std::size_t slideAmountFrames = 20;
-    const bool windowIsFull = (activeWindowWidth == windowWidthFrames);
-    const bool morePieceRemainsAhead = (windowStartReferenceIndex + windowWidthFrames) < referenceFrameCount;
-    if (windowIsFull && morePieceRemainsAhead && (bestRelativeIndex + slideThresholdFrames >= windowWidthFrames)) {
-        std::size_t actualSlideAmount = std::min(slideAmountFrames, referenceFrameCount - (windowStartReferenceIndex + windowWidthFrames));
-        actualSlideAmount = std::min(actualSlideAmount, bestRelativeIndex);
-        slideWindowForward(actualSlideAmount);
+    if (strictGateActive) {
+        consecutiveStallFrames = hasIngestedFirstFrame ? (consecutiveStallFrames + 1) : 0;
+        consecutiveSkipFrames = 0;
+        hasIngestedFirstFrame = true;
+        const double stalledReferenceFrameIndex =
+            publishedReferenceFrameIndex.load(std::memory_order_relaxed);
+        publishAlignmentPosition(stalledReferenceFrameIndex, alignmentConfidence, bestCostInRow);
+    } else {
+        if (hasIngestedFirstFrame) {
+            const std::size_t advance = (jBestAbsolute >= currentBestReferenceIndexAbsolute)
+                                             ? (jBestAbsolute - currentBestReferenceIndexAbsolute)
+                                             : 0;
+            consecutiveStallFrames = (advance == 0) ? (consecutiveStallFrames + 1) : 0;
+            consecutiveSkipFrames = (advance > maxPlausibleSkipPerFrame) ? (consecutiveSkipFrames + 1) : 0;
+        } else {
+            consecutiveStallFrames = 0;
+            consecutiveSkipFrames = 0;
+        }
+        currentBestReferenceIndexAbsolute = jBestAbsolute;
+        hasIngestedFirstFrame = true;
+
+        publishAlignmentPosition(static_cast<double>(jBestAbsolute), alignmentConfidence, bestCostInRow);
+
+        // Slide the window forward once the best-matching column has advanced
+        // close enough to the trailing edge that continued progress would soon
+        // run off the end of the currently retained band.
+        constexpr std::size_t slideThresholdFrames = 20;
+        constexpr std::size_t slideAmountFrames = 20;
+        const bool windowIsFull = (activeWindowWidth == windowWidthFrames);
+        const bool morePieceRemainsAhead = (windowStartReferenceIndex + windowWidthFrames) < referenceFrameCount;
+        if (windowIsFull && morePieceRemainsAhead && (bestRelativeIndex + slideThresholdFrames >= windowWidthFrames)) {
+            std::size_t actualSlideAmount =
+                std::min(slideAmountFrames, referenceFrameCount - (windowStartReferenceIndex + windowWidthFrames));
+            actualSlideAmount = std::min(actualSlideAmount, bestRelativeIndex);
+            slideWindowForward(actualSlideAmount);
+        }
     }
 
     std::swap(previousRowCost, currentRowCost);
@@ -286,6 +314,17 @@ void OnlineDtwAlignmentEngine::seekToReferenceFrame(double referenceFrameIndex) 
     // live frame re-acquires with the open-begin condition inside the new window.
 
     publishAlignmentPosition(clampedFrameIndex, 0.0, 0.0);
+}
+
+void OnlineDtwAlignmentEngine::setTrackingMode(TrackingMode trackingModeValue) {
+    trackingMode = trackingModeValue;
+}
+
+void OnlineDtwAlignmentEngine::setStrictConfidenceThreshold(double threshold) {
+    if (!std::isfinite(threshold)) {
+        return;
+    }
+    strictConfidenceThreshold = std::clamp(threshold, 0.0, 1.0);
 }
 
 void OnlineDtwAlignmentEngine::publishAlignmentPosition(double referenceFrameIndex, double alignmentConfidence,

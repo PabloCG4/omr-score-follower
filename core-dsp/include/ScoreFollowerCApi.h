@@ -45,6 +45,14 @@ typedef struct {
     double cumulative_distortion_cost;
 } ScoreFollowerAlignmentPosition;
 
+// Mirrors scorefollower::dsp::TrackingMode. FIXED_TEMPO keeps native
+// alignment on the Rubato path; the host owns the presentation cursor.
+typedef enum {
+    SCORE_FOLLOWER_TRACKING_MODE_RUBATO = 0,
+    SCORE_FOLLOWER_TRACKING_MODE_STRICT = 1,
+    SCORE_FOLLOWER_TRACKING_MODE_FIXED_TEMPO = 2
+} ScoreFollowerTrackingMode;
+
 // Constructs a new engine configured for the given audio sample rate and
 // hop length (both forwarded verbatim to the underlying FeatureExtractor's
 // FeatureExtractionConfiguration; all other extraction parameters keep
@@ -99,6 +107,17 @@ score_follower_get_alignment_position(const ScoreFollowerEngine* engine);
 // chromagram has been loaded yet.
 SCORE_FOLLOWER_CORE_API int score_follower_seek_to_reference_frame(ScoreFollowerEngine* engine,
                                                                     double reference_frame_index);
+
+// Selects the practice-mode policy for subsequent audio pushes. Returns 0
+// on success, a negative value on a NULL engine or an unrecognized mode.
+SCORE_FOLLOWER_CORE_API int score_follower_set_tracking_mode(ScoreFollowerEngine* engine,
+                                                              ScoreFollowerTrackingMode mode);
+
+// Confidence below which STRICT mode freezes reference advance. Default is
+// approximately 0.35. Returns 0 on success, a negative value on a NULL
+// engine or a non-finite / out-of-range threshold.
+SCORE_FOLLOWER_CORE_API int score_follower_set_strict_confidence_threshold(
+    ScoreFollowerEngine* engine, double threshold);
 
 // Resets the engine's extraction and alignment state (partially
 // accumulated audio, current position, cumulative cost) so a new

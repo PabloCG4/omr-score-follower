@@ -145,6 +145,48 @@ int score_follower_seek_to_reference_frame(ScoreFollowerEngine* engine, double r
     }
 }
 
+int score_follower_set_tracking_mode(ScoreFollowerEngine* engine, ScoreFollowerTrackingMode mode) {
+    if (engine == nullptr) {
+        return -1;
+    }
+    try {
+        scorefollower::dsp::TrackingMode trackingMode;
+        switch (mode) {
+            case SCORE_FOLLOWER_TRACKING_MODE_RUBATO:
+                trackingMode = scorefollower::dsp::TrackingMode::Rubato;
+                break;
+            case SCORE_FOLLOWER_TRACKING_MODE_STRICT:
+                trackingMode = scorefollower::dsp::TrackingMode::Strict;
+                break;
+            case SCORE_FOLLOWER_TRACKING_MODE_FIXED_TEMPO:
+                // Native alignment stays Rubato-equivalent; Dart owns the cursor.
+                trackingMode = scorefollower::dsp::TrackingMode::FixedTempo;
+                break;
+            default:
+                return -3;
+        }
+        engine->alignmentEngine->setTrackingMode(trackingMode);
+        return 0;
+    } catch (...) {
+        return -2;
+    }
+}
+
+int score_follower_set_strict_confidence_threshold(ScoreFollowerEngine* engine, double threshold) {
+    if (engine == nullptr) {
+        return -1;
+    }
+    if (!(threshold >= 0.0 && threshold <= 1.0)) {
+        return -3;
+    }
+    try {
+        engine->alignmentEngine->setStrictConfidenceThreshold(threshold);
+        return 0;
+    } catch (...) {
+        return -2;
+    }
+}
+
 void score_follower_reset(ScoreFollowerEngine* engine) {
     if (engine == nullptr) {
         return;

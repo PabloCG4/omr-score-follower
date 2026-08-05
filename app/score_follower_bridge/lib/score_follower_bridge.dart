@@ -78,6 +78,16 @@ final class ScoreFollowerAlignmentPosition {
   }
 }
 
+/// Idiomatic mirror of `ScoreFollowerTrackingMode` from ScoreFollowerCApi.h.
+enum ScoreFollowerTrackingMode {
+  rubato(bindings.ScoreFollowerTrackingModeNative.rubato),
+  strict(bindings.ScoreFollowerTrackingModeNative.strict),
+  fixedTempo(bindings.ScoreFollowerTrackingModeNative.fixedTempo);
+
+  const ScoreFollowerTrackingMode(this.nativeValue);
+  final int nativeValue;
+}
+
 /// Converts a chunk of little-endian, signed 16-bit PCM mono audio bytes
 /// (the format `package:record`'s `AudioEncoder.pcm16bits` streaming mode
 /// delivers) into the `[-1.0, 1.0]`-normalized float32 samples
@@ -296,6 +306,29 @@ final class ScoreFollowerEngine {
     final resultCode = bindings.scoreFollowerSeekToReferenceFrame(_handle, referenceFrameIndex);
     if (resultCode != 0) {
       throw StateError('score_follower_seek_to_reference_frame failed with code $resultCode.');
+    }
+  }
+
+  /// Selects the practice-mode policy for subsequent audio pushes.
+  /// [ScoreFollowerTrackingMode.fixedTempo] keeps native alignment on the
+  /// Rubato path; the host owns the presentation cursor clock.
+  void setTrackingMode(ScoreFollowerTrackingMode mode) {
+    _checkNotDisposed();
+    final resultCode = bindings.scoreFollowerSetTrackingMode(_handle, mode.nativeValue);
+    if (resultCode != 0) {
+      throw StateError('score_follower_set_tracking_mode failed with code $resultCode.');
+    }
+  }
+
+  /// Confidence below which Strict mode freezes reference advance.
+  void setStrictConfidenceThreshold(double threshold) {
+    _checkNotDisposed();
+    final resultCode =
+        bindings.scoreFollowerSetStrictConfidenceThreshold(_handle, threshold);
+    if (resultCode != 0) {
+      throw StateError(
+        'score_follower_set_strict_confidence_threshold failed with code $resultCode.',
+      );
     }
   }
 

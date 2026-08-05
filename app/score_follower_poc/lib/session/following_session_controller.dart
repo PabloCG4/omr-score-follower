@@ -6,6 +6,8 @@ import 'package:flutter/foundation.dart';
 import 'package:record/record.dart';
 import 'package:score_follower_bridge/score_follower_bridge.dart';
 
+import '../config/tracking_mode.dart';
+import '../config/tracking_session_config.dart';
 import '../score/score_document.dart';
 import '../score/score_document_loader.dart';
 import '../score/score_timeline_mapper.dart';
@@ -18,17 +20,17 @@ import 'cursor_display_model.dart';
 final class FollowingSessionController extends ChangeNotifier {
   FollowingSessionController({
     required this.cursorDisplayModel,
+    required this.sessionConfig,
     ScoreDocumentLoader? scoreDocumentLoader,
     AudioRecorder? audioRecorder,
-    this.defaultScoreId = 'demo_four_chords',
     this.timelineMapper = const ScoreTimelineMapper(),
   })  : scoreDocumentLoader = scoreDocumentLoader ?? ScoreDocumentLoader(),
         audioRecorder = audioRecorder ?? AudioRecorder();
 
   final CursorDisplayModel cursorDisplayModel;
+  final TrackingSessionConfig sessionConfig;
   final ScoreDocumentLoader scoreDocumentLoader;
   final AudioRecorder audioRecorder;
-  final String defaultScoreId;
   final ScoreTimelineMapper timelineMapper;
 
   /// High-frequency DSP poll channel (~30 Hz).
@@ -46,11 +48,12 @@ final class FollowingSessionController extends ChangeNotifier {
   Isolate? audioPushIsolate;
   Timer? uiPollingTimer;
 
+  TrackingMode get trackingMode => sessionConfig.trackingMode;
+
   bool get canNavigateManually => !isRunning && scoreDocument != null;
 
-  /// Loads [defaultScoreId] (or [scoreId]) from assets, creates/recreates the
-  /// native engine, and loads the reference chromagram. The engine survives
-  /// subsequent Stop calls so click-to-seek can call FFI while idle.
+  /// Loads [sessionConfig.scoreId] from assets, creates/recreates the
+  /// native engine, applies tracking mode, and seeks to frame 0.
   Future<void> loadScore({String? scoreId}) async {
     isLoadingScore = true;
     lastErrorMessage = null;
@@ -59,11 +62,13 @@ final class FollowingSessionController extends ChangeNotifier {
       await tearDownCapturePipeline();
       destroyEngine();
 
-      final document = await scoreDocumentLoader.loadFromAssets(scoreId ?? defaultScoreId);
+      final document =
+          await scoreDocumentLoader.loadFromAssets(scoreId ?? sessionConfig.scoreId);
       scoreDocument = document;
       currentPageIndex = 0;
       cursorDisplayModel.attachScoreDocument(document);
       ensureEngineLoaded(document);
+      applyTrackingModeToEngineAndCursor();
       seekNativeAndUi(0.0, notifyPage: true);
     } catch (error) {
       lastErrorMessage = error.toString();
@@ -71,6 +76,26 @@ final class FollowingSessionController extends ChangeNotifier {
       isLoadingScore = false;
       notifyListeners();
     }
+  }
+
+  /// Pushes [sessionConfig] into the native engine and [cursorDisplayModel].
+  void applyTrackingModeToEngineAndCursor() {
+    cursorDisplayModel.setTrackingMode(sessionConfig.trackingMode);
+    cursorDisplayModel.setStrictConfidenceThreshold(
+      sessionConfig.strictConfidenceThreshold,
+    );
+    final liveEngine = engine;
+    if (liveEngine == null) {
+      return;
+    }
+    // Fixed Tempo: native still aligns like Rubato for confidence only.
+    final nativeMode = switch (sessionConfig.trackingMode) {
+      TrackingMode.strict => ScoreFollowerTrackingMode.strict,
+      TrackingMode.rubato => ScoreFollowerTrackingMode.rubato,
+      TrackingMode.fixedTempo => ScoreFollowerTrackingMode.fixedTempo,
+    };
+    liveEngine.setTrackingMode(nativeMode);
+    liveEngine.setStrictConfidenceThreshold(sessionConfig.strictConfidenceThreshold);
   }
 
   Future<void> start() async {
@@ -98,9 +123,12 @@ final class FollowingSessionController extends ChangeNotifier {
       }
 
       ensureEngineLoaded(document);
+      applyTrackingModeToEngineAndCursor();
       final liveEngine = engine!;
       // Resume from the UI's authoritative cursor frame (tap/scrub/stop position).
       liveEngine.seekToReferenceFrame(cursorDisplayModel.displayedFrameIndex);
+      // Seed Fixed Tempo clock from the current seek/display position.
+      cursorDisplayModel.snapToFrameIndex(cursorDisplayModel.displayedFrameIndex);
 
       final pushIsolateReadyPort = ReceivePort();
       createdIsolate = await Isolate.spawn(
@@ -132,13 +160,29 @@ final class FollowingSessionController extends ChangeNotifier {
           position: position,
           polledAt: DateTime.now(),
         );
-        cursorDisplayModel.setTargetFrameIndex(position.referenceFrameIndex);
+        cursorDisplayModel.updateCursorHealth(
+          alignmentConfidence: position.alignmentConfidence,
+          sessionIsRunning: true,
+        );
 
-        final mappedPage =
-            timelineMapper.mapFrameIndex(document, position.referenceFrameIndex).pageIndex;
-        if (mappedPage != currentPageIndex) {
-          currentPageIndex = mappedPage;
-          notifyListeners();
+        // Rubato / Strict drive the cursor from DSP; Fixed Tempo ignores
+        // the frame index for motion but still polls confidence above.
+        if (sessionConfig.trackingMode != TrackingMode.fixedTempo) {
+          cursorDisplayModel.setTargetFrameIndex(position.referenceFrameIndex);
+          final mappedPage =
+              timelineMapper.mapFrameIndex(document, position.referenceFrameIndex).pageIndex;
+          if (mappedPage != currentPageIndex) {
+            currentPageIndex = mappedPage;
+            notifyListeners();
+          }
+        } else {
+          final mappedPage = timelineMapper
+              .mapFrameIndex(document, cursorDisplayModel.targetFrameIndex)
+              .pageIndex;
+          if (mappedPage != currentPageIndex) {
+            currentPageIndex = mappedPage;
+            notifyListeners();
+          }
         }
       });
 
@@ -164,6 +208,10 @@ final class FollowingSessionController extends ChangeNotifier {
   Future<void> stop() async {
     await tearDownCapturePipeline();
     cursorDisplayModel.stop();
+    cursorDisplayModel.updateCursorHealth(
+      alignmentConfidence: alignmentSnapshot.value.alignmentConfidence,
+      sessionIsRunning: false,
+    );
     isRunning = false;
     // Keep engine and cursor/seek position; do not zero the diagnostics strip
     // to the zero frame — leave the last known / sought position visible.
@@ -283,6 +331,10 @@ final class FollowingSessionController extends ChangeNotifier {
         cumulativeDistortionCost: 0.0,
       ),
       polledAt: DateTime.now(),
+    );
+    cursorDisplayModel.updateCursorHealth(
+      alignmentConfidence: 0.0,
+      sessionIsRunning: isRunning,
     );
 
     final liveEngine = engine;

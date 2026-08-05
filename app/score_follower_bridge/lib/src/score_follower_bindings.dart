@@ -99,6 +99,29 @@ external int scoreFollowerSeekToReferenceFrame(
   double referenceFrameIndex,
 );
 
+/// Mirrors `ScoreFollowerTrackingMode` from ScoreFollowerCApi.h.
+abstract final class ScoreFollowerTrackingModeNative {
+  static const int rubato = 0;
+  static const int strict = 1;
+  static const int fixedTempo = 2;
+}
+
+@ffi.Native<ffi.Int Function(ffi.Pointer<ScoreFollowerEngineHandle>, ffi.Int32)>(
+  symbol: 'score_follower_set_tracking_mode',
+)
+external int scoreFollowerSetTrackingMode(
+  ffi.Pointer<ScoreFollowerEngineHandle> engine,
+  int mode,
+);
+
+@ffi.Native<ffi.Int Function(ffi.Pointer<ScoreFollowerEngineHandle>, ffi.Double)>(
+  symbol: 'score_follower_set_strict_confidence_threshold',
+)
+external int scoreFollowerSetStrictConfidenceThreshold(
+  ffi.Pointer<ScoreFollowerEngineHandle> engine,
+  double threshold,
+);
+
 @ffi.Native<ffi.Void Function(ffi.Pointer<ScoreFollowerEngineHandle>)>(
   symbol: 'score_follower_reset',
 )

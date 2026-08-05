@@ -16,6 +16,16 @@
 
 namespace scorefollower::dsp {
 
+// Practice / tracking policy applied during live ingest. Rubato is the
+// historical Online DTW behavior. Strict freezes reference advance when
+// alignment confidence is poor. FixedTempo leaves native alignment in the
+// Rubato path; the host owns the presentation cursor clock.
+enum class TrackingMode {
+    Rubato = 0,
+    Strict = 1,
+    FixedTempo = 2,
+};
+
 // The alignment engine's current estimate of where the live performance is
 // located within the reference score, expressed as a fractional index into
 // the reference chromagram's frame sequence so that sub-frame position can
@@ -85,6 +95,15 @@ public:
     // Clears per-performance DTW path state but preserves the loaded
     // reference chromagram and any resolved tuning offset.
     virtual void seekToReferenceFrame(double referenceFrameIndex) = 0;
+
+    // Selects the practice-mode policy for subsequent ingestLiveChromaVector
+    // calls. FixedTempo is treated identically to Rubato inside the engine;
+    // host-side cursor clocks must ignore the published frame index.
+    virtual void setTrackingMode(TrackingMode trackingMode) = 0;
+
+    // Confidence below which Strict mode freezes published reference advance
+    // and blocks window slides. Ignored in Rubato / FixedTempo.
+    virtual void setStrictConfidenceThreshold(double threshold) = 0;
 
     // Grants access to the tuning compensation subsystem so the host
     // application can feed it calibration frames and query its resolved

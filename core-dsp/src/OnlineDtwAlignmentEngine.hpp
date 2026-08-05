@@ -71,6 +71,8 @@ public:
     void ingestLiveChromaVector(const ChromaVector& liveChromaVector) override;
     [[nodiscard]] AlignmentPosition getCurrentAlignmentPosition() const override;
     void seekToReferenceFrame(double referenceFrameIndex) override;
+    void setTrackingMode(TrackingMode trackingModeValue) override;
+    void setStrictConfidenceThreshold(double threshold) override;
     AutoCorrelationTuningCompensator& getTuningCompensator() override;
     void reset() override;
 
@@ -100,6 +102,9 @@ private:
     std::size_t maxRunLengthFrames;
     double runLengthEscalationPenalty;
     double confidenceSmoothingFactor;
+
+    TrackingMode trackingMode = TrackingMode::Rubato;
+    double strictConfidenceThreshold = 0.35;
 
     Chromagram referenceChromagram{};
 

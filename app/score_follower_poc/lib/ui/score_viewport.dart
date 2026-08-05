@@ -119,6 +119,8 @@ class ScoreViewportState extends State<ScoreViewport> {
                               pose.pageIndex != pageIndex;
                           return CursorOverlay(
                             pose: pose,
+                            cursorHealth: model.cursorHealth,
+                            pulsePhase: model.pulsePhase,
                             isHidden: hideCursor,
                           );
                         },
