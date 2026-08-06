@@ -71,6 +71,12 @@ public:
     // latched for the remainder of the performance.
     [[nodiscard]] virtual bool hasResolvedTuningOffset() const = 0;
 
+    // Host-supplied whole-semitone transposition latch (wizard / instrument
+    // profile). Bypasses the live auto-calibration accumulator so session
+    // start can apply a previously measured offset without feeding frames.
+    // Seek and AlignmentEngine::reset must preserve this latch.
+    virtual void latchTuningOffsetSemitones(double offsetSemitones) = 0;
+
     virtual void reset() = 0;
 };
 

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../config/tracking_mode.dart';
 import '../config/tracking_session_config.dart';
@@ -8,6 +7,7 @@ import '../domain/user_preferences.dart';
 import '../persistence/app_database_provider.dart';
 import '../persistence/repositories/instrument_repository.dart';
 import '../persistence/repositories/user_preferences_repository.dart';
+import 'acoustic_tuning_wizard.dart';
 import 'tracking_screen.dart';
 
 /// App entry point: restore practice mode + instrument from local SQLite,
@@ -31,8 +31,10 @@ class InitialConfigScreenState extends State<InitialConfigScreen> {
   String? errorMessage;
 
   final TextEditingController nameController = TextEditingController();
-  final TextEditingController frequencyController = TextEditingController();
-  final TextEditingController transpositionController = TextEditingController();
+
+  /// In-editor tuning values (updated by the acoustic wizard or instrument load).
+  double editorBaseFrequencyHz = 440.0;
+  int editorTranspositionSemitones = 0;
 
   @override
   void initState() {
@@ -46,8 +48,6 @@ class InitialConfigScreenState extends State<InitialConfigScreen> {
   @override
   void dispose() {
     nameController.dispose();
-    frequencyController.dispose();
-    transpositionController.dispose();
     super.dispose();
   }
 
@@ -89,30 +89,45 @@ class InitialConfigScreenState extends State<InitialConfigScreen> {
   void populateInstrumentFields(Instrument? instrument) {
     if (instrument == null) {
       nameController.text = '';
-      frequencyController.text = '440.0';
-      transpositionController.text = '0';
+      editorBaseFrequencyHz = 440.0;
+      editorTranspositionSemitones = 0;
       return;
     }
     nameController.text = instrument.name;
-    frequencyController.text = instrument.baseFrequencyHz.toString();
-    transpositionController.text = instrument.transpositionSemitones.toString();
+    editorBaseFrequencyHz = instrument.baseFrequencyHz;
+    editorTranspositionSemitones = instrument.transpositionSemitones;
+  }
+
+  Future<void> openTuningWizard() async {
+    final result = await AcousticTuningWizard.show(context);
+    if (result == null || !mounted) {
+      return;
+    }
+    setState(() {
+      editorBaseFrequencyHz = result.baseFrequencyHz;
+      editorTranspositionSemitones = result.transpositionSemitones;
+      errorMessage = null;
+    });
+    await persistInstrumentEdits(showErrors: true);
   }
 
   Future<void> saveInstrumentEdits() async {
+    await persistInstrumentEdits(showErrors: true);
+  }
+
+  Future<Instrument?> persistInstrumentEdits({required bool showErrors}) async {
     final current = selectedInstrument;
     if (current == null) {
-      return;
+      return null;
     }
-    final parsedFrequency = double.tryParse(frequencyController.text.trim());
-    final parsedTransposition = int.tryParse(transpositionController.text.trim());
     final trimmedName = nameController.text.trim();
-    if (trimmedName.isEmpty || parsedFrequency == null || parsedFrequency <= 0 ||
-        parsedTransposition == null) {
-      setState(() {
-        errorMessage =
-            'Enter a non-empty name, a positive A4 frequency (Hz), and an integer transposition.';
-      });
-      return;
+    if (trimmedName.isEmpty || editorBaseFrequencyHz <= 0) {
+      if (showErrors) {
+        setState(() {
+          errorMessage = 'Enter a non-empty name and determine a valid tuning.';
+        });
+      }
+      return null;
     }
 
     setState(() {
@@ -123,8 +138,8 @@ class InitialConfigScreenState extends State<InitialConfigScreen> {
       final updated = await instrumentRepository.upsert(
         current.copyWith(
           name: trimmedName,
-          baseFrequencyHz: parsedFrequency,
-          transpositionSemitones: parsedTransposition,
+          baseFrequencyHz: editorBaseFrequencyHz,
+          transpositionSemitones: editorTranspositionSemitones,
         ),
       );
       final preferences = UserPreferences(
@@ -134,7 +149,7 @@ class InitialConfigScreenState extends State<InitialConfigScreen> {
       await preferencesRepository.save(preferences);
       final refreshed = await instrumentRepository.listAll();
       if (!mounted) {
-        return;
+        return updated;
       }
       setState(() {
         instruments = refreshed;
@@ -142,14 +157,18 @@ class InitialConfigScreenState extends State<InitialConfigScreen> {
         isSaving = false;
       });
       populateInstrumentFields(updated);
+      return updated;
     } catch (error) {
       if (!mounted) {
-        return;
+        return null;
       }
       setState(() {
         isSaving = false;
-        errorMessage = error.toString();
+        if (showErrors) {
+          errorMessage = error.toString();
+        }
       });
+      return null;
     }
   }
 
@@ -277,26 +296,15 @@ class InitialConfigScreenState extends State<InitialConfigScreen> {
       errorMessage = null;
     });
     try {
-      // Persist any in-progress field edits before navigating.
-      final parsedFrequency =
-          double.tryParse(frequencyController.text.trim()) ?? instrument.baseFrequencyHz;
-      final parsedTransposition =
-          int.tryParse(transpositionController.text.trim()) ?? instrument.transpositionSemitones;
-      final trimmedName =
-          nameController.text.trim().isEmpty ? instrument.name : nameController.text.trim();
-      final savedInstrument = await instrumentRepository.upsert(
-        instrument.copyWith(
-          name: trimmedName,
-          baseFrequencyHz: parsedFrequency,
-          transpositionSemitones: parsedTransposition,
-        ),
-      );
-      await preferencesRepository.save(
-        UserPreferences(
-          trackingMode: selectedMode,
-          activeInstrumentId: savedInstrument.id,
-        ),
-      );
+      final savedInstrument = await persistInstrumentEdits(showErrors: true);
+      if (savedInstrument == null) {
+        if (mounted) {
+          setState(() {
+            isSaving = false;
+          });
+        }
+        return;
+      }
 
       if (!mounted) {
         return;
@@ -324,6 +332,11 @@ class InitialConfigScreenState extends State<InitialConfigScreen> {
         errorMessage = error.toString();
       });
     }
+  }
+
+  String formatTranspositionChip(int transpositionSemitones) {
+    final sign = transpositionSemitones > 0 ? '+' : '';
+    return 'Transposition: $sign$transpositionSemitones';
   }
 
   @override
@@ -416,28 +429,26 @@ class InitialConfigScreenState extends State<InitialConfigScreen> {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    TextField(
-                      controller: frequencyController,
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      inputFormatters: [
-                        FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        Chip(
+                          label: Text(
+                            'Base tuning (A4): ${editorBaseFrequencyHz.toStringAsFixed(1)} Hz',
+                          ),
+                        ),
+                        Chip(
+                          label: Text(
+                            formatTranspositionChip(editorTranspositionSemitones),
+                          ),
+                        ),
                       ],
-                      decoration: const InputDecoration(
-                        labelText: 'A4 base frequency (Hz)',
-                        border: OutlineInputBorder(),
-                      ),
                     ),
                     const SizedBox(height: 12),
-                    TextField(
-                      controller: transpositionController,
-                      keyboardType: TextInputType.number,
-                      inputFormatters: [
-                        FilteringTextInputFormatter.allow(RegExp(r'-?[0-9]')),
-                      ],
-                      decoration: const InputDecoration(
-                        labelText: 'Transposition (semitones)',
-                        border: OutlineInputBorder(),
-                      ),
+                    FilledButton.tonal(
+                      onPressed: isSaving ? null : openTuningWizard,
+                      child: const Text('Determine Tuning'),
                     ),
                     const SizedBox(height: 12),
                     Row(

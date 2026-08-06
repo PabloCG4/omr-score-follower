@@ -55,6 +55,15 @@ struct FeatureExtractionConfiguration {
     std::size_t maxPendingChromaFrames = 8;
 };
 
+// Dominant fundamental estimate derived from pre-fold Constant-Q bin
+// magnitudes (peak bin + parabolic interpolation). Used by the acoustic
+// tuning wizard; confidence is in [0, 1] and near-zero means silence or
+// an unusable peak.
+struct DominantPitchEstimate {
+    double frequencyHz = 0.0;
+    double confidence = 0.0;
+};
+
 // Interface implemented by the concrete DSP pipeline that turns a stream of
 // raw audio samples, drained from a CircularAudioBuffer by a non-real-time
 // analysis thread, into a chromagram. Implementations own all intermediate
@@ -71,6 +80,11 @@ public:
     // once configured.
     virtual void configure(const FeatureExtractionConfiguration& configuration) = 0;
 
+    // Rebuilds analysis kernels so their center frequencies track
+    // `tuningOffsetSemitones` (12 * log2(A4_Hz / 440)). Intended for
+    // session-prepare retune, not the real-time audio path.
+    virtual void setTuningOffsetSemitones(double tuningOffsetSemitones) = 0;
+
     // Ingests a contiguous block of newly available, mono, already-resampled
     // audio samples. Implementations are expected to internally accumulate
     // samples until a full hop-sized analysis frame is available.
@@ -80,6 +94,11 @@ public:
     // ingestAudioFrame, if a full analysis frame became available since the
     // last call to pollLatestChromaVector, or std::nullopt otherwise.
     virtual std::optional<ChromaVector> pollLatestChromaVector() = 0;
+
+    // Returns the most recent CQT peak-based pitch estimate from a completed
+    // analysis hop, or std::nullopt when no hop has completed yet or the
+    // peak failed the silence gate.
+    [[nodiscard]] virtual std::optional<DominantPitchEstimate> getLatestDominantPitchEstimate() const = 0;
 
     // Returns the full chromagram accumulated since construction or the last
     // call to reset. Primarily intended for offline analysis, diagnostics,

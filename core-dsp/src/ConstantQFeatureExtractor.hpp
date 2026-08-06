@@ -27,8 +27,10 @@ public:
     explicit ConstantQFeatureExtractor(std::shared_ptr<SpectralBackend> spectralBackend);
 
     void configure(const FeatureExtractionConfiguration& configuration) override;
+    void setTuningOffsetSemitones(double tuningOffsetSemitones) override;
     void ingestAudioFrame(const float* audioSamples, std::size_t sampleCount) override;
     std::optional<ChromaVector> pollLatestChromaVector() override;
+    [[nodiscard]] std::optional<DominantPitchEstimate> getLatestDominantPitchEstimate() const override;
     [[nodiscard]] const Chromagram& getAccumulatedChromagram() const override;
     void reset() override;
 
@@ -56,6 +58,7 @@ private:
 
     void buildOctaveKernelBank(std::size_t octaveIndex, OctaveAnalysisState& octaveState);
     void computeAndEnqueueAnalysisFrame();
+    void updateDominantPitchEstimateFromBinMagnitudes();
     void enqueuePendingChroma(const ChromaVector& chromaVector);
     static KernelSparseBand computeSparseBand(const std::vector<std::complex<float>>& kernelSpectrum);
     static void foldMagnitudesIntoChromaVector(const std::vector<float>& allBinMagnitudes,
@@ -78,6 +81,9 @@ private:
     // Bounded FIFO so multi-hop ingest calls deliver every completed frame to
     // the alignment engine instead of silently overwriting a single slot.
     std::deque<ChromaVector> pendingChromaFrames;
+
+    // Latest CQT peak pitch from a completed hop; cleared on reset/configure.
+    std::optional<DominantPitchEstimate> latestDominantPitchEstimate;
 };
 
 }  // namespace scorefollower::dsp

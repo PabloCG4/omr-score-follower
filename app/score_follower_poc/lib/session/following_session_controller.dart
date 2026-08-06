@@ -415,6 +415,13 @@ final class FollowingSessionController extends ChangeNotifier {
       sampleRateHz: document.sampleRateHz,
       hopLengthSamples: document.hopLengthSamples,
     );
+    // Apply instrument A4 + transposition once at prepare time. Seek/reset
+    // must preserve CQT kernels and the latched chroma rotation; do not
+    // call setTuning again after seekToReferenceFrame.
+    created.setTuning(
+      a4FrequencyHz: sessionConfig.baseFrequencyHz,
+      transpositionSemitones: sessionConfig.transpositionSemitones,
+    );
     engine = created;
   }
 

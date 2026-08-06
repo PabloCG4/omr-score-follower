@@ -138,6 +138,15 @@ bool ChromaRotationTuningCompensator::hasResolvedTuningOffset() const {
     return latchedOffsetSemitones.has_value();
 }
 
+void ChromaRotationTuningCompensator::latchTuningOffsetSemitones(double offsetSemitones) {
+    // Whole-semitone bins only: matches the chroma-rotation resolution limit.
+    const double roundedOffset = static_cast<double>(static_cast<int>(std::lround(offsetSemitones)));
+    latchedOffsetSemitones = roundedOffset;
+    // Host latch is authoritative; stop accumulating auto-calibration frames.
+    accumulatedLiveProfile.fill(0.0);
+    accumulatedFrameCount = 0;
+}
+
 void ChromaRotationTuningCompensator::reset() {
     accumulatedLiveProfile.fill(0.0);
     accumulatedFrameCount = 0;

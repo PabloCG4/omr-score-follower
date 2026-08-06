@@ -102,9 +102,11 @@ score_follower_get_alignment_position(const ScoreFollowerEngine* engine);
 // Repositions the alignment engine so subsequent audio pushes resume
 // tracking from reference_frame_index (clamped to the loaded reference).
 // Also resets the FeatureExtractor's partial sample accumulator so stale
-// audio from before the seek cannot emit chroma at the old locus. Returns
-// 0 on success, a negative value on a NULL engine or when no reference
-// chromagram has been loaded yet.
+// audio from before the seek cannot emit chroma at the old locus.
+// Deliberately preserves CQT kernel tuning (A4 offset) and any latched
+// transposition on the alignment compensator. Returns 0 on success, a
+// negative value on a NULL engine or when no reference chromagram has
+// been loaded yet.
 SCORE_FOLLOWER_CORE_API int score_follower_seek_to_reference_frame(ScoreFollowerEngine* engine,
                                                                     double reference_frame_index);
 
@@ -120,10 +122,29 @@ SCORE_FOLLOWER_CORE_API int score_follower_set_tracking_mode(ScoreFollowerEngine
 SCORE_FOLLOWER_CORE_API int score_follower_set_strict_confidence_threshold(
     ScoreFollowerEngine* engine, double threshold);
 
+// Reads the FeatureExtractor's latest CQT-peak dominant pitch estimate from
+// the most recent completed analysis hop. Writes frequency_hz and a [0, 1]
+// confidence. Returns 0 when a usable estimate is available, 1 when no hop
+// has completed or the silence gate rejected the peak, and a negative value
+// on a NULL engine or NULL output pointers.
+SCORE_FOLLOWER_CORE_API int score_follower_estimate_dominant_pitch(ScoreFollowerEngine* engine,
+                                                                    double* out_frequency_hz,
+                                                                    double* out_confidence);
+
+// Applies instrument tuning for the session: retunes Constant-Q kernels so
+// their centers track a4_frequency_hz (via 12*log2(A4/440) offset) and
+// latches whole-semitone live-chroma rotation to transposition_semitones.
+// Must be called once when preparing the engine; seek/reset preserve both.
+// Returns 0 on success, a negative value on a NULL engine or invalid A4.
+SCORE_FOLLOWER_CORE_API int score_follower_set_tuning(ScoreFollowerEngine* engine,
+                                                       double a4_frequency_hz,
+                                                       int transposition_semitones);
+
 // Resets the engine's extraction and alignment state (partially
 // accumulated audio, current position, cumulative cost) so a new
 // performance attempt can begin without discarding the already-loaded
-// reference chromagram. Passing a NULL engine is a safe no-op.
+// reference chromagram. Passing a NULL engine is a safe no-op. Does not
+// clear CQT kernel tuning or a latched transposition offset.
 SCORE_FOLLOWER_CORE_API void score_follower_reset(ScoreFollowerEngine* engine);
 
 #ifdef __cplusplus

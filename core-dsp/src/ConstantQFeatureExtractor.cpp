@@ -113,6 +113,7 @@ void ConstantQFeatureExtractor::configure(const FeatureExtractionConfiguration& 
     totalSamplesIngested = 0;
     samplesAccountedForByAnalysisFrames = 0;
     pendingChromaFrames.clear();
+    latestDominantPitchEstimate.reset();
 
     accumulatedChromagram = Chromagram{};
     accumulatedChromagram.sampleRateHz = configuration.sampleRateHz;
@@ -123,6 +124,16 @@ void ConstantQFeatureExtractor::configure(const FeatureExtractionConfiguration& 
         accumulatedChromagram.frames.reserve(
             static_cast<std::size_t>(framesPerSecond * ReservedChromagramDurationSeconds));
     }
+}
+
+void ConstantQFeatureExtractor::setTuningOffsetSemitones(double tuningOffsetSemitones) {
+    if (!std::isfinite(tuningOffsetSemitones)) {
+        throw std::invalid_argument("tuningOffsetSemitones must be finite.");
+    }
+    FeatureExtractionConfiguration retunedConfiguration = configuration;
+    retunedConfiguration.tuningOffsetSemitones = tuningOffsetSemitones;
+    // Rebuild kernels so CQT centers track the instrument A4; not real-time-safe.
+    configure(retunedConfiguration);
 }
 
 void ConstantQFeatureExtractor::buildOctaveKernelBank(std::size_t octaveIndex, OctaveAnalysisState& octaveState) {
@@ -314,10 +325,74 @@ void ConstantQFeatureExtractor::computeAndEnqueueAnalysisFrame() {
     ChromaVector chromaVector{};
     foldMagnitudesIntoChromaVector(binMagnitudeScratch, binsPerOctave, chromaVector);
     enqueuePendingChroma(chromaVector);
+    updateDominantPitchEstimateFromBinMagnitudes();
 
     if (configuration.accumulateChromagramFrames) {
         accumulatedChromagram.frames.push_back(chromaVector);
     }
+}
+
+void ConstantQFeatureExtractor::updateDominantPitchEstimateFromBinMagnitudes() {
+    const std::size_t binsPerOctave = configuration.constantQBinsPerOctave;
+    if (binMagnitudeScratch.empty() || binsPerOctave == 0) {
+        latestDominantPitchEstimate.reset();
+        return;
+    }
+
+    std::size_t peakBinIndex = 0;
+    float peakMagnitude = binMagnitudeScratch[0];
+    double magnitudeSum = 0.0;
+    for (std::size_t binIndex = 0; binIndex < binMagnitudeScratch.size(); ++binIndex) {
+        const float magnitude = binMagnitudeScratch[binIndex];
+        magnitudeSum += static_cast<double>(magnitude);
+        if (magnitude > peakMagnitude) {
+            peakMagnitude = magnitude;
+            peakBinIndex = binIndex;
+        }
+    }
+
+    const double meanMagnitude = magnitudeSum / static_cast<double>(binMagnitudeScratch.size());
+    // Peak-to-mean ratio gates silence / broadband noise. A clear pitch
+    // produces a sharp CQT peak well above the average bin energy.
+    constexpr double minimumPeakMagnitude = 1e-6;
+    constexpr double minimumPeakToMeanRatio = 8.0;
+    if (peakMagnitude < minimumPeakMagnitude || meanMagnitude < 1e-12 ||
+        (static_cast<double>(peakMagnitude) / meanMagnitude) < minimumPeakToMeanRatio) {
+        latestDominantPitchEstimate.reset();
+        return;
+    }
+
+    // Parabolic interpolation on neighboring bin magnitudes for sub-bin F0.
+    double fractionalBinOffset = 0.0;
+    if (peakBinIndex > 0 && peakBinIndex + 1 < binMagnitudeScratch.size()) {
+        const double leftMagnitude = static_cast<double>(binMagnitudeScratch[peakBinIndex - 1]);
+        const double centerMagnitude = static_cast<double>(peakMagnitude);
+        const double rightMagnitude = static_cast<double>(binMagnitudeScratch[peakBinIndex + 1]);
+        const double denominator = leftMagnitude - 2.0 * centerMagnitude + rightMagnitude;
+        if (std::abs(denominator) > 1e-12) {
+            fractionalBinOffset = 0.5 * (leftMagnitude - rightMagnitude) / denominator;
+            fractionalBinOffset = std::clamp(fractionalBinOffset, -0.5, 0.5);
+        }
+    }
+
+    const double continuousBinIndex = static_cast<double>(peakBinIndex) + fractionalBinOffset;
+    const double tuningMultiplier = std::pow(2.0, configuration.tuningOffsetSemitones / 12.0);
+    const double frequencyHz = configuration.constantQMinimumFrequencyHz * tuningMultiplier *
+                               std::pow(2.0, continuousBinIndex / static_cast<double>(binsPerOctave));
+
+    if (!std::isfinite(frequencyHz) || frequencyHz <= 0.0) {
+        latestDominantPitchEstimate.reset();
+        return;
+    }
+
+    // Map peak-to-mean into a soft [0, 1] confidence for the host UI.
+    const double peakToMeanRatio = static_cast<double>(peakMagnitude) / meanMagnitude;
+    const double confidence = std::clamp((peakToMeanRatio - minimumPeakToMeanRatio) / 24.0, 0.0, 1.0);
+
+    DominantPitchEstimate estimate{};
+    estimate.frequencyHz = frequencyHz;
+    estimate.confidence = confidence;
+    latestDominantPitchEstimate = estimate;
 }
 
 void ConstantQFeatureExtractor::enqueuePendingChroma(const ChromaVector& chromaVector) {
@@ -364,6 +439,10 @@ std::optional<ChromaVector> ConstantQFeatureExtractor::pollLatestChromaVector() 
     return result;
 }
 
+std::optional<DominantPitchEstimate> ConstantQFeatureExtractor::getLatestDominantPitchEstimate() const {
+    return latestDominantPitchEstimate;
+}
+
 const Chromagram& ConstantQFeatureExtractor::getAccumulatedChromagram() const {
     return accumulatedChromagram;
 }
@@ -375,6 +454,7 @@ void ConstantQFeatureExtractor::reset() {
     samplesAccountedForByAnalysisFrames = 0;
     pendingChromaFrames.clear();
     accumulatedChromagram.frames.clear();
+    latestDominantPitchEstimate.reset();
 }
 
 }  // namespace scorefollower::dsp

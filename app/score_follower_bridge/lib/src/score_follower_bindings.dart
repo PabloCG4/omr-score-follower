@@ -122,6 +122,24 @@ external int scoreFollowerSetStrictConfidenceThreshold(
   double threshold,
 );
 
+@ffi.Native<
+    ffi.Int Function(ffi.Pointer<ScoreFollowerEngineHandle>, ffi.Pointer<ffi.Double>,
+        ffi.Pointer<ffi.Double>)>(symbol: 'score_follower_estimate_dominant_pitch')
+external int scoreFollowerEstimateDominantPitch(
+  ffi.Pointer<ScoreFollowerEngineHandle> engine,
+  ffi.Pointer<ffi.Double> outFrequencyHz,
+  ffi.Pointer<ffi.Double> outConfidence,
+);
+
+@ffi.Native<ffi.Int Function(ffi.Pointer<ScoreFollowerEngineHandle>, ffi.Double, ffi.Int)>(
+  symbol: 'score_follower_set_tuning',
+)
+external int scoreFollowerSetTuning(
+  ffi.Pointer<ScoreFollowerEngineHandle> engine,
+  double a4FrequencyHz,
+  int transpositionSemitones,
+);
+
 @ffi.Native<ffi.Void Function(ffi.Pointer<ScoreFollowerEngineHandle>)>(
   symbol: 'score_follower_reset',
 )

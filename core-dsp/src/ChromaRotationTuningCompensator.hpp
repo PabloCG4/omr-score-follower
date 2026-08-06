@@ -34,6 +34,7 @@ public:
     void ingestCalibrationChromaVector(const ChromaVector& liveChromaVector) override;
     [[nodiscard]] std::optional<double> resolveTuningOffsetSemitones() const override;
     [[nodiscard]] bool hasResolvedTuningOffset() const override;
+    void latchTuningOffsetSemitones(double offsetSemitones) override;
     void reset() override;
 
     // Not part of the abstract interface: supplies the aggregate chroma

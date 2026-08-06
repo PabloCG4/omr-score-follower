@@ -11,6 +11,7 @@
 #include "FeatureExtractor.hpp"
 #include "FeatureExtractorFactory.hpp"
 
+#include <cmath>
 #include <memory>
 #include <optional>
 
@@ -187,6 +188,49 @@ int score_follower_set_strict_confidence_threshold(ScoreFollowerEngine* engine, 
     }
     try {
         engine->alignmentEngine->setStrictConfidenceThreshold(threshold);
+        return 0;
+    } catch (...) {
+        return -2;
+    }
+}
+
+int score_follower_estimate_dominant_pitch(ScoreFollowerEngine* engine, double* out_frequency_hz,
+                                            double* out_confidence) {
+    if (engine == nullptr || out_frequency_hz == nullptr || out_confidence == nullptr) {
+        return -1;
+    }
+    try {
+        const std::optional<scorefollower::dsp::DominantPitchEstimate> estimate =
+            engine->featureExtractor->getLatestDominantPitchEstimate();
+        if (!estimate.has_value()) {
+            *out_frequency_hz = 0.0;
+            *out_confidence = 0.0;
+            return 1;
+        }
+        *out_frequency_hz = estimate->frequencyHz;
+        *out_confidence = estimate->confidence;
+        return 0;
+    } catch (...) {
+        *out_frequency_hz = 0.0;
+        *out_confidence = 0.0;
+        return -2;
+    }
+}
+
+int score_follower_set_tuning(ScoreFollowerEngine* engine, double a4_frequency_hz,
+                               int transposition_semitones) {
+    if (engine == nullptr) {
+        return -1;
+    }
+    if (!(std::isfinite(a4_frequency_hz) && a4_frequency_hz > 0.0)) {
+        return -3;
+    }
+    try {
+        // Kernels assume A4 = 440 Hz at tuningOffsetSemitones = 0.
+        const double tuningOffsetSemitones = 12.0 * std::log2(a4_frequency_hz / 440.0);
+        engine->featureExtractor->setTuningOffsetSemitones(tuningOffsetSemitones);
+        engine->alignmentEngine->getTuningCompensator().latchTuningOffsetSemitones(
+            static_cast<double>(transposition_semitones));
         return 0;
     } catch (...) {
         return -2;

@@ -88,6 +88,20 @@ enum ScoreFollowerTrackingMode {
   final int nativeValue;
 }
 
+/// CQT-peak dominant pitch estimate from [ScoreFollowerEngine.estimateDominantPitch].
+final class DominantPitchEstimate {
+  const DominantPitchEstimate({
+    required this.frequencyHz,
+    required this.confidence,
+  });
+
+  /// Estimated fundamental frequency in Hertz.
+  final double frequencyHz;
+
+  /// Soft peak-quality score in `[0, 1]`.
+  final double confidence;
+}
+
 /// Converts a chunk of little-endian, signed 16-bit PCM mono audio bytes
 /// (the format `package:record`'s `AudioEncoder.pcm16bits` streaming mode
 /// delivers) into the `[-1.0, 1.0]`-normalized float32 samples
@@ -329,6 +343,54 @@ final class ScoreFollowerEngine {
       throw StateError(
         'score_follower_set_strict_confidence_threshold failed with code $resultCode.',
       );
+    }
+  }
+
+  /// Latest CQT-peak dominant pitch from a completed analysis hop, or `null`
+  /// when no usable estimate is available (silence / no hop yet).
+  DominantPitchEstimate? estimateDominantPitch() {
+    _checkNotDisposed();
+    final frequencyPointer = pkg_ffi.calloc<ffi.Double>();
+    final confidencePointer = pkg_ffi.calloc<ffi.Double>();
+    try {
+      final resultCode = bindings.scoreFollowerEstimateDominantPitch(
+        _handle,
+        frequencyPointer,
+        confidencePointer,
+      );
+      if (resultCode < 0) {
+        throw StateError(
+          'score_follower_estimate_dominant_pitch failed with code $resultCode.',
+        );
+      }
+      if (resultCode != 0) {
+        return null;
+      }
+      return DominantPitchEstimate(
+        frequencyHz: frequencyPointer.value,
+        confidence: confidencePointer.value,
+      );
+    } finally {
+      pkg_ffi.calloc.free(frequencyPointer);
+      pkg_ffi.calloc.free(confidencePointer);
+    }
+  }
+
+  /// Retunes CQT kernels to [a4FrequencyHz] and latches live-chroma
+  /// rotation to [transpositionSemitones]. Call once when preparing the
+  /// engine; seek/reset preserve both.
+  void setTuning({
+    required double a4FrequencyHz,
+    required int transpositionSemitones,
+  }) {
+    _checkNotDisposed();
+    final resultCode = bindings.scoreFollowerSetTuning(
+      _handle,
+      a4FrequencyHz,
+      transpositionSemitones,
+    );
+    if (resultCode != 0) {
+      throw StateError('score_follower_set_tuning failed with code $resultCode.');
     }
   }
 
