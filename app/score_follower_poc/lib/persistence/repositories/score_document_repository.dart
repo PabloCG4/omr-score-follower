@@ -20,6 +20,18 @@ final class ScoreDocumentRepository {
     return rows.map(mapRow).toList(growable: false);
   }
 
+  /// Reactive stream of all persisted score metadata rows (title ascending).
+  /// Emits on insert/update/delete so the score library UI can leave
+  /// "Processing" and show "Ready" without a manual refresh.
+  Stream<List<PersistedScoreDocument>> watchAll() {
+    return (database.select(database.scoreDocuments)
+          ..orderBy([(table) => OrderingTerm.asc(table.title)]))
+        .watch()
+        .map(
+          (rows) => rows.map(mapRow).toList(growable: false),
+        );
+  }
+
   Future<PersistedScoreDocument?> getById(int documentId) async {
     final row = await (database.select(database.scoreDocuments)
           ..where((table) => table.id.equals(documentId)))

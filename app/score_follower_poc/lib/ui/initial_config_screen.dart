@@ -3,11 +3,14 @@ import 'package:flutter/material.dart';
 import '../config/tracking_mode.dart';
 import '../config/tracking_session_config.dart';
 import '../domain/instrument.dart';
+import '../domain/persisted_score_document.dart';
 import '../domain/user_preferences.dart';
 import '../persistence/app_database_provider.dart';
 import '../persistence/repositories/instrument_repository.dart';
 import '../persistence/repositories/user_preferences_repository.dart';
+import '../score/score_library_controller.dart';
 import 'acoustic_tuning_wizard.dart';
+import 'score_library_modal.dart';
 import 'tracking_screen.dart';
 
 /// App entry point: restore practice mode + instrument from local SQLite,
@@ -339,6 +342,62 @@ class InitialConfigScreenState extends State<InitialConfigScreen> {
     return 'Transposition: $sign$transpositionSemitones';
   }
 
+  Widget buildScoreSummarySection(BuildContext context) {
+    final libraryController = ScoreLibraryScope.of(context);
+    return ListenableBuilder(
+      listenable: libraryController,
+      builder: (context, child) {
+        return StreamBuilder<List<PersistedScoreDocument>>(
+          stream: libraryController.watchReadyScores(),
+          builder: (context, snapshot) {
+            final readyScores =
+                snapshot.data ?? const <PersistedScoreDocument>[];
+            final title =
+                libraryController.resolveSelectedScoreTitle(readyScores);
+            final pendingCount = libraryController.pendingIngestions.length;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Chip(
+                      avatar: const Icon(Icons.music_note, size: 18),
+                      label: Text(title),
+                    ),
+                    if (pendingCount > 0)
+                      Chip(
+                        avatar: const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        label: Text(
+                          pendingCount == 1
+                              ? '1 processing…'
+                              : '$pendingCount processing…',
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: isSaving
+                      ? null
+                      : () => ScoreLibraryModal.open(context),
+                  icon: const Icon(Icons.folder_open),
+                  label: const Text('Select Score'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -381,6 +440,20 @@ class InitialConfigScreenState extends State<InitialConfigScreen> {
                       selectedMode.description,
                       style: Theme.of(context).textTheme.bodyLarge,
                     ),
+                    const SizedBox(height: 32),
+                    Text(
+                      'Score',
+                      style: Theme.of(context).textTheme.headlineSmall,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Choose a bundled or imported score. Custom PDFs are '
+                      'processed in the background; tracking still uses the '
+                      'demo pack until the filesystem loader ships.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                    const SizedBox(height: 16),
+                    buildScoreSummarySection(context),
                     const SizedBox(height: 32),
                     Text(
                       'Instrument',
