@@ -1,10 +1,9 @@
 name: score_follower_poc
 description: >
-  Phase 5.2 Flutter PoC: captures microphone audio, drives
-  score_follower_core through score_follower_bridge, and maps the tracked
-  reference frame index onto a score page with a smoothly interpolated cursor.
+  Phase 5 Flutter PoC: offline local persistence, microphone capture through
+  score_follower_bridge, and score-following UI with practice modes.
 publish_to: none
-version: 0.2.0
+version: 0.3.0
 
 environment:
   sdk: ^3.10.0
@@ -18,11 +17,18 @@ dependencies:
   record: any
   android_libcpp_shared: any
   flutter_svg: any
+  drift: ^2.28.0
+  drift_flutter: ^0.2.0
+  sqlite3_flutter_libs: ^0.5.0
+  path_provider: ^2.1.0
+  path: ^1.9.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: any
+  drift_dev: ^2.28.0
+  build_runner: ^2.4.0
 
 flutter:
   uses-material-design: true

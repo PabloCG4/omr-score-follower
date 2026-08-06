@@ -1,10 +1,12 @@
-// Phase 5.4 entry point: InitialConfigScreen routes into TrackingScreen
-// with a typed TrackingSessionConfig (practice mode + thresholds).
+// Phase 5.5.1 entry: open local SQLite, seed defaults, then show config UI.
 import 'package:flutter/material.dart';
 
+import 'persistence/app_database_provider.dart';
 import 'ui/initial_config_screen.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await AppDatabaseProvider.initialize();
   runApp(const ScoreFollowerPocApp());
 }
 
