@@ -5,10 +5,9 @@ import '../database/app_database.dart';
 
 /// Persistence API for [PersistedScoreDocument] metadata rows.
 ///
-/// Phase 5.5.1 only establishes the table and repository surface. PDF upload,
-/// external OMR/API processing, and any UI that populates this table are
-/// intentionally deferred to a later phase. Callers outside future ingestion
-/// pipelines should not insert rows yet.
+/// PDF upload and OMR processing live in `lib/omr/` ([OmrScoreIngestionService]).
+/// Tracking still loads the demo asset pack until a later phase maps these
+/// rows into a filesystem [ScoreDocument] loader.
 final class ScoreDocumentRepository {
   ScoreDocumentRepository(this.database);
 

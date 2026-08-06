@@ -1,0 +1,178 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://omr.scorefollower.local/schemas/omr_structural_document.v1.json",
+  "title": "OmrStructuralDocument",
+  "description": "Phase 5.5.3.A production contract for OMR backend output. Consolidates manifest, timeline anchors, and reference chromagram into one JSON file stored at structuralDataLocalPath.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "displayTitle",
+    "sampleRateHz",
+    "hopLengthSamples",
+    "referenceFrameCount",
+    "pages",
+    "anchors",
+    "referenceChromagram"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1,
+      "description": "Contract major version. Clients must reject unknown majors."
+    },
+    "documentId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Backend-assigned document id (typically a UUID). Used as the local scores/<documentId>/ folder name when present."
+    },
+    "displayTitle": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "sampleRateHz": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Must match the live CQT path (production default 22050)."
+    },
+    "hopLengthSamples": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "description": "Samples per analysis hop (production default 512)."
+    },
+    "referenceFrameCount": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "description": "Number of chromagram frames N; must equal referenceChromagram.frameCount."
+    },
+    "pages": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/page" }
+    },
+    "anchors": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/anchor" }
+    },
+    "referenceChromagram": {
+      "$ref": "#/definitions/referenceChromagram"
+    },
+    "noteEvents": {
+      "type": "array",
+      "description": "Optional symbolic onsets for future UX; not required by the C++ DTW engine today.",
+      "items": { "$ref": "#/definitions/noteEvent" }
+    }
+  },
+  "definitions": {
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pageIndex", "widthPx", "heightPx"],
+      "properties": {
+        "pageIndex": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based page index; pages must be contiguous from 0."
+        },
+        "widthPx": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "heightPx": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "anchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frameIndex", "pageIndex", "xNorm", "yNorm", "measureNumber"],
+      "properties": {
+        "frameIndex": {
+          "type": "number",
+          "description": "Reference chromagram frame index (may be fractional)."
+        },
+        "pageIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "xNorm": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "yNorm": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "measureNumber": {
+          "type": "integer"
+        }
+      }
+    },
+    "referenceChromagram": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["encoding", "pitchClassCount", "frameCount", "dataBase64"],
+      "properties": {
+        "encoding": {
+          "type": "string",
+          "const": "f32le_row_major",
+          "description": "Little-endian IEEE float32, frame-major then 12 pitch classes (C..B)."
+        },
+        "pitchClassCount": {
+          "type": "integer",
+          "const": 12
+        },
+        "frameCount": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "dataBase64": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Standard Base64 of frameCount * 12 * 4 bytes."
+        }
+      }
+    },
+    "noteEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["midiPitch", "onsetFrame", "durationFrames"],
+      "properties": {
+        "midiPitch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 127
+        },
+        "onsetFrame": {
+          "type": "number",
+          "minimum": 0
+        },
+        "durationFrames": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "pageIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "xNorm": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "yNorm": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    }
+  }
+}

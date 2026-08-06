@@ -34,6 +34,7 @@ class ScoreDocuments extends Table {
   TextColumn get title => text().withLength(min: 1, max: 256)();
   /// Relative to the application documents directory (never absolute).
   TextColumn get originalPdfLocalPath => text()();
+  /// Relative path to OMR structural JSON (schema v1); see docs/omr_structural_document.schema.v1.json.
   TextColumn get structuralDataLocalPath => text()();
   DateTimeColumn get createdAtUtc => dateTime()();
   DateTimeColumn get updatedAtUtc => dateTime()();

@@ -17,6 +17,6 @@ final class PersistedScoreDocument {
   /// Relative path to the original PDF under the app documents directory.
   final String originalPdfLocalPath;
 
-  /// Relative path to future MusicXML/JSON structural data.
+  /// Relative path to OMR structural JSON (`OmrStructuralDocument` schema v1).
   final String structuralDataLocalPath;
 }
