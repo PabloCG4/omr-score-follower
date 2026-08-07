@@ -1,6 +1,7 @@
-"""Stable DeepScores-style class taxonomy for OMR detections (placeholder IDs).
+"""Stable DeepScores-style class taxonomy for OMR detections.
 
-Class IDs are fixed so Phase C.3 can map symbols without renumbering.
+Class IDs are fixed so reconstruction can map symbols without renumbering
+existing C.2 IDs (0..19). Staff and extended flags are appended for C.3.
 """
 
 from __future__ import annotations
@@ -27,6 +28,16 @@ OMR_CLASS_NAMES: list[str] = [
     "barline",
     "ledgerLine",
     "augmentationDot",
+    # Phase C.3 extensions (appended to preserve prior IDs).
+    "staff",
+    "flag16thUp",
+    "flag16thDown",
+    "flag32ndUp",
+    "flag32ndDown",
+    "flag64thUp",
+    "flag64thDown",
+    "flag128thUp",
+    "flag128thDown",
 ]
 
 

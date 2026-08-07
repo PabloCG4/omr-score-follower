@@ -1,4 +1,4 @@
-"""OMR processing abstraction and mock implementation (no vision models yet)."""
+"""OMR processing abstraction, mock, and vision-backed implementation."""
 
 from __future__ import annotations
 
@@ -11,7 +11,14 @@ from pathlib import Path
 from typing import Protocol
 
 from app.core.config import Settings, get_settings
+from app.core.errors import ProcessingAppError, ValidationAppError
+from app.reconstruction.document_synthesizer import page_sizes_from_page_images
+from app.reconstruction.structural_reconstruction_service import (
+    StructuralReconstructionService,
+)
 from app.schemas.omr_structural import OmrStructuralDocument
+from app.vision.pdf_rasterizer import PdfPageRasterizer
+from app.vision.vision_detection_service import VisionDetectionService
 
 LOGGER = logging.getLogger(__name__)
 
@@ -19,7 +26,7 @@ PITCH_CLASS_COUNT = 12
 
 
 class OmrProcessor(Protocol):
-    """Replaceable OMR pipeline; DINOv2/SAHI will implement this later."""
+    """Replaceable OMR pipeline."""
 
     async def process(
         self,
@@ -96,9 +103,73 @@ class MockOmrProcessor:
         return document
 
 
+class VisionOmrProcessor:
+    """Runs DINOv2+SAHI vision then structural reconstruction."""
+
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        *,
+        vision_service: VisionDetectionService | None = None,
+        reconstruction_service: StructuralReconstructionService | None = None,
+        rasterizer: PdfPageRasterizer | None = None,
+        prefer_dinov2_hub: bool = True,
+    ) -> None:
+        self.settings = settings or get_settings()
+        self.prefer_dinov2_hub = prefer_dinov2_hub
+        self.vision_service = vision_service
+        self.reconstruction_service = (
+            reconstruction_service or StructuralReconstructionService()
+        )
+        self.rasterizer = rasterizer or PdfPageRasterizer(
+            dpi=self.settings.vision_raster_dpi,
+            max_pages=self.settings.vision_max_pages,
+        )
+
+    def _ensure_vision_service(self) -> VisionDetectionService:
+        if self.vision_service is None:
+            self.vision_service = VisionDetectionService(
+                settings=self.settings,
+                rasterizer=self.rasterizer,
+                prefer_dinov2_hub=self.prefer_dinov2_hub,
+            )
+        return self.vision_service
+
+    async def process(
+        self,
+        pdf_path: Path,
+        *,
+        title: str | None,
+    ) -> OmrStructuralDocument:
+        LOGGER.info("Vision OMR processing %s", pdf_path.name)
+
+        def run_pipeline() -> OmrStructuralDocument:
+            page_images = self.rasterizer.render(pdf_path)
+            if not page_images:
+                raise ProcessingAppError("PDF produced no rasterized pages.")
+            detections = self._ensure_vision_service().detect_pages(page_images)
+            if not detections:
+                raise ProcessingAppError(
+                    "Vision pipeline returned no symbol detections."
+                )
+            return self.reconstruction_service.reconstruct(
+                detections,
+                page_sizes_from_page_images(page_images),
+                title=title,
+                pdf_path=pdf_path,
+            )
+
+        try:
+            return await asyncio.to_thread(run_pipeline)
+        except (ProcessingAppError, ValidationAppError):
+            raise
+        except Exception as error:  # noqa: BLE001
+            raise ProcessingAppError(f"OMR pipeline failed: {error}") from error
+
+
 def get_omr_processor() -> OmrProcessor:
-    """FastAPI dependency that returns the current OMR processor implementation."""
-    return MockOmrProcessor()
+    """FastAPI dependency that returns the live vision-backed OMR processor."""
+    return VisionOmrProcessor()
 
 
 def _resolve_display_title(title: str | None, pdf_path: Path) -> str:

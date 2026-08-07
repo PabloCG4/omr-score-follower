@@ -5,9 +5,9 @@
 # (schemaVersion 1). This service does not persist scores; the mobile app owns
 # Drift / local filesystem storage.
 #
-# Phase 5.5.3.C.1 ships MockOmrProcessor on the HTTP route.
-# Phase 5.5.3.C.2 adds VisionDetectionService (DINOv2 + SAHI) under app/vision/;
-# C.3 will wire it into a real OmrProcessor (HTTP still uses the mock for now).
+# Phase 5.5.3.C.3 wires the live pipeline on POST /v1/omr/scores:
+# VisionOmrProcessor → VisionDetectionService → StructuralReconstructionService
+# → OmrStructuralDocument. MockOmrProcessor remains available for tests.
 
 ## Setup
 

@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import Settings, get_settings
 from app.main import create_app
-from app.services.omr_processor import MockOmrProcessor
+from app.services.omr_processor import MockOmrProcessor, get_omr_processor
 from app.services.temp_storage import TempPdfStorage
 
 
@@ -27,8 +27,14 @@ def test_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
 @pytest.fixture
 def client(test_settings: Settings) -> TestClient:
     app = create_app(test_settings)
+
+    def override_processor() -> MockOmrProcessor:
+        return MockOmrProcessor(test_settings)
+
+    app.dependency_overrides[get_omr_processor] = override_processor
     with TestClient(app) as test_client:
         yield test_client
+    app.dependency_overrides.clear()
 
 
 def build_minimal_pdf_bytes() -> bytes:

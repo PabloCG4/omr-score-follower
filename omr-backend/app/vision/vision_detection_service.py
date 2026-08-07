@@ -10,7 +10,7 @@ from sahi.predict import get_sliced_prediction
 from app.core.config import Settings, get_settings
 from app.core.errors import ProcessingAppError, ValidationAppError
 from app.vision.category_taxonomy import build_category_mapping, class_name_for_id
-from app.vision.detections import RawDetection
+from app.vision.detections import PageImage, RawDetection
 from app.vision.pdf_rasterizer import PdfPageRasterizer
 from app.vision.sahi_dino_model import DinoV2SahiDetectionModel
 
@@ -50,10 +50,7 @@ class VisionDetectionService:
         )
 
     def detect_pdf(self, pdf_path: Path) -> list[RawDetection]:
-        """Run sliced inference on every page and return flat raw detections.
-
-        Sync CPU/GPU work; FastAPI callers should wrap with asyncio.to_thread.
-        """
+        """Rasterize a PDF then run sliced inference on every page."""
         try:
             pages = self.rasterizer.render(pdf_path)
         except (ValidationAppError, ProcessingAppError):
@@ -63,6 +60,12 @@ class VisionDetectionService:
 
         if not pages:
             raise ValidationAppError("PDF produced no rasterized pages.")
+        return self.detect_pages(pages)
+
+    def detect_pages(self, pages: list[PageImage]) -> list[RawDetection]:
+        """Run sliced inference on pre-rasterized page images."""
+        if not pages:
+            raise ValidationAppError("No page images provided for detection.")
 
         assert self.detection_model is not None
         detections: list[RawDetection] = []
@@ -88,7 +91,6 @@ class VisionDetectionService:
                 bbox = object_prediction.bbox
                 if bbox is None:
                     continue
-                # SAHI BBox exposes minx, miny, maxx, maxy after shift remap.
                 x1 = float(bbox.minx)
                 y1 = float(bbox.miny)
                 x2 = float(bbox.maxx)
