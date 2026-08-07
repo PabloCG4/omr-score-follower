@@ -1,8 +1,12 @@
 venv/
+.venv/
+omr-backend/.venv/
 .cursorrules
 TECHNICAL_CHANGELOG.md
 audio/
 __pycache__/
+*.pyc
+.pytest_cache/
 core-dsp/build/
 core-dsp/out/
 *.o
