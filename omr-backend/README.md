@@ -5,7 +5,9 @@
 # (schemaVersion 1). This service does not persist scores; the mobile app owns
 # Drift / local filesystem storage.
 #
-# Phase 5.5.3.C.1 ships a MockOmrProcessor only (no DINOv2 / SAHI yet).
+# Phase 5.5.3.C.1 ships MockOmrProcessor on the HTTP route.
+# Phase 5.5.3.C.2 adds VisionDetectionService (DINOv2 + SAHI) under app/vision/;
+# C.3 will wire it into a real OmrProcessor (HTTP still uses the mock for now).
 
 ## Setup
 
@@ -47,6 +49,14 @@ Environment variables (prefix `OMR_`):
 | `OMR_MAX_UPLOAD_BYTES` | 52428800 (50 MiB) | Reject larger uploads |
 | `OMR_MOCK_INFERENCE_DELAY_SECONDS` | 2.0 | Simulated processing latency |
 | `OMR_LOG_LEVEL` | INFO | Logging verbosity |
+| `OMR_VISION_RASTER_DPI` | 200 | PDF page raster DPI (PyMuPDF) |
+| `OMR_VISION_MAX_PAGES` | 50 | Reject PDFs with more pages |
+| `OMR_VISION_SLICE_HEIGHT` / `WIDTH` | 512 | SAHI slice size |
+| `OMR_VISION_OVERLAP_RATIO` | 0.2 | SAHI slice overlap |
+| `OMR_VISION_CONFIDENCE_THRESHOLD` | 0.25 | Drop low-score detections |
+| `OMR_VISION_DEVICE` | cpu | Torch device (`cpu` / `cuda:0`) |
+| `OMR_VISION_WEIGHTS_PATH` | (unset) | Optional DeepScores `.pt`; random weights if missing |
+| `OMR_VISION_INPUT_SIZE` | 518 | Model input side (multiple of 14 for DINOv2) |
 
 ## Tests
 

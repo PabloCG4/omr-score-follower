@@ -26,6 +26,17 @@ class Settings(BaseSettings):
     )
     log_level: str = "INFO"
 
+    # Vision inference (Phase 5.5.3.C.2)
+    vision_raster_dpi: float = Field(default=200.0, gt=0.0)
+    vision_max_pages: int = Field(default=50, ge=1)
+    vision_slice_height: int = Field(default=512, ge=64)
+    vision_slice_width: int = Field(default=512, ge=64)
+    vision_overlap_ratio: float = Field(default=0.2, ge=0.0, lt=1.0)
+    vision_confidence_threshold: float = Field(default=0.25, ge=0.0, le=1.0)
+    vision_device: str = "cpu"
+    vision_weights_path: str | None = None
+    vision_input_size: int = Field(default=518, ge=64)
+
 
 @lru_cache
 def get_settings() -> Settings:
