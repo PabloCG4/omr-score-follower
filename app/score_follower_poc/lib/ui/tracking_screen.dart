@@ -5,6 +5,7 @@ import '../config/tracking_session_config.dart';
 import '../omr/score_local_file_store.dart';
 import '../persistence/app_database_provider.dart';
 import '../persistence/repositories/score_document_repository.dart';
+import '../score/score_document_loader.dart';
 import '../score/score_visual_document_loader.dart';
 import '../session/alignment_snapshot.dart';
 import '../session/cursor_display_model.dart';
@@ -35,16 +36,21 @@ class TrackingScreenState extends State<TrackingScreen>
   void initState() {
     super.initState();
     cursorDisplayModel = CursorDisplayModel(tickerProvider: this);
-    final visualLoader = ScoreVisualDocumentLoader(
-      scoreDocumentRepository: ScoreDocumentRepository(
-        AppDatabaseProvider.requireDatabase,
-      ),
-      fileStore: ScoreLocalFileStore(),
+    final repository = ScoreDocumentRepository(
+      AppDatabaseProvider.requireDatabase,
     );
+    final fileStore = ScoreLocalFileStore();
     sessionController = FollowingSessionController(
       cursorDisplayModel: cursorDisplayModel,
       sessionConfig: widget.config,
-      scoreVisualDocumentLoader: visualLoader,
+      scoreDocumentLoader: ScoreDocumentLoader(
+        scoreDocumentRepository: repository,
+        fileStore: fileStore,
+      ),
+      scoreVisualDocumentLoader: ScoreVisualDocumentLoader(
+        scoreDocumentRepository: repository,
+        fileStore: fileStore,
+      ),
     );
     sessionController.loadSessionDocuments();
   }
@@ -170,6 +176,17 @@ class TrackingScreenState extends State<TrackingScreen>
                   child: Text(
                     sessionController.lastErrorMessage!,
                     style: TextStyle(color: Theme.of(context).colorScheme.error),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              if (sessionController.lastWarningMessage != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24.0, 0.0, 24.0, 8.0),
+                  child: Text(
+                    sessionController.lastWarningMessage!,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
                     textAlign: TextAlign.center,
                   ),
                 ),

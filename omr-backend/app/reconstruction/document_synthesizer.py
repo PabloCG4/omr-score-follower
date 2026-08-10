@@ -206,8 +206,23 @@ def _build_anchors(
             }
         )
 
+    # Densify with one anchor per note so pages without barlines remain
+    # interpolatable for tap-to-seek and cursor mapping.
+    for note in notes:
+        page = _page_for_index(pages, note.page_index)
+        anchors.append(
+            {
+                "frameIndex": float(note.onset_quarters * frames_per_quarter_value),
+                "pageIndex": note.page_index,
+                "xNorm": _clamp01(note.x_center / float(page.width_px)),
+                "yNorm": _clamp01(note.y_center / float(page.height_px)),
+                "measureNumber": measure_number,
+            }
+        )
+
     last_frame = float(max(frame_count - 1, 0))
-    if anchors[-1]["frameIndex"] < last_frame:
+    max_existing_frame = max(float(anchor["frameIndex"]) for anchor in anchors)
+    if max_existing_frame < last_frame:
         last_page = pages[-1]
         last_system = system_by_page.get(last_page.page_index)
         y_last = (
@@ -224,6 +239,14 @@ def _build_anchors(
                 "measureNumber": measure_number + 1,
             }
         )
+
+    anchors.sort(
+        key=lambda anchor: (
+            float(anchor["frameIndex"]),
+            int(anchor["pageIndex"]),
+            float(anchor["xNorm"]),
+        )
+    )
 
     # Ensure strictly non-decreasing frameIndex for schema validator.
     previous = float("-inf")
@@ -246,7 +269,8 @@ def _interpolate_frame_at_x(
 ) -> float:
     page_notes = [note for note in notes if note.page_index == page_index]
     if not page_notes:
-        return 0.0
+        return _fallback_frame_without_page_notes(notes, page_index, frames_per_quarter_value)
+
     ordered = sorted(page_notes, key=lambda note: note.x_center)
     if x_position <= ordered[0].x_center:
         return ordered[0].onset_quarters * frames_per_quarter_value
@@ -264,6 +288,30 @@ def _interpolate_frame_at_x(
             )
             return t * frames_per_quarter_value
     return ordered[-1].onset_quarters * frames_per_quarter_value
+
+
+def _fallback_frame_without_page_notes(
+    notes: list[ReconstructedNote],
+    page_index: int,
+    frames_per_quarter_value: float,
+) -> float:
+    """Estimate a frame when the barline page has no notes (never force 0.0)."""
+    if not notes:
+        return 0.0
+
+    earlier = [note for note in notes if note.page_index < page_index]
+    if earlier:
+        last = max(earlier, key=lambda note: note.onset_quarters)
+        return (last.onset_quarters + last.duration_quarters) * frames_per_quarter_value
+
+    later = [note for note in notes if note.page_index > page_index]
+    if later:
+        first = min(later, key=lambda note: note.onset_quarters)
+        return first.onset_quarters * frames_per_quarter_value
+
+    # Notes exist only on this page index but were filtered elsewhere — use global span.
+    first = min(notes, key=lambda note: note.onset_quarters)
+    return first.onset_quarters * frames_per_quarter_value
 
 
 def _page_for_index(pages: list[PageSize], page_index: int) -> PageSize:

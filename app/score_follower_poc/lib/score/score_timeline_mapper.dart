@@ -10,7 +10,10 @@ final class ScoreTimelineMapper {
 
   /// Absolute yNorm difference below which two anchors are treated as the
   /// same staff/system when grouping for reverse mapping.
-  static const double systemYNormEpsilon = 1e-4;
+  ///
+  /// 3% of page height tolerates OMR float noise so same-staff anchors
+  /// group for horizontal interpolation.
+  static const double systemYNormEpsilon = 0.03;
 
   ScoreCursorPose mapFrameIndex(ScoreDocument document, double frameIndex) {
     final anchors = document.anchors;
@@ -81,32 +84,97 @@ final class ScoreTimelineMapper {
         if (anchor.pageIndex == pageIndex) anchor,
     ];
     if (pageAnchors.isEmpty) {
-      return anchors.first.frameIndex;
+      return bridgeFrameAcrossEmptyPage(
+        anchors: anchors,
+        pageIndex: pageIndex,
+        xNorm: clampedX,
+      );
     }
 
     final systemAnchors = selectClosestSystemAnchors(pageAnchors, clampedY);
-    if (systemAnchors.isEmpty) {
-      return pageAnchors.first.frameIndex;
+    final List<TimelineAnchor> lerpAnchors;
+    if (systemAnchors.length >= 2) {
+      lerpAnchors = List<TimelineAnchor>.from(systemAnchors)
+        ..sort((left, right) => left.xNorm.compareTo(right.xNorm));
+    } else {
+      // Single-anchor systems cannot interpolate in x; use page reading order.
+      lerpAnchors = List<TimelineAnchor>.from(pageAnchors)
+        ..sort((left, right) => left.xNorm.compareTo(right.xNorm));
     }
 
-    systemAnchors.sort((left, right) => left.xNorm.compareTo(right.xNorm));
+    return interpolateFrameByXNorm(
+      lerpAnchors: lerpAnchors,
+      xNorm: clampedX,
+      documentAnchors: anchors,
+    );
+  }
 
-    if (clampedX <= systemAnchors.first.xNorm) {
-      return systemAnchors.first.frameIndex;
-    }
-    if (clampedX >= systemAnchors.last.xNorm) {
-      return systemAnchors.last.frameIndex;
+  /// When [pageIndex] has no anchors, lerp between the previous page's last
+  /// and the next page's first anchor by [xNorm].
+  double bridgeFrameAcrossEmptyPage({
+    required List<TimelineAnchor> anchors,
+    required int pageIndex,
+    required double xNorm,
+  }) {
+    TimelineAnchor? previous;
+    TimelineAnchor? following;
+    for (final anchor in anchors) {
+      if (anchor.pageIndex < pageIndex) {
+        previous = anchor;
+      } else if (anchor.pageIndex > pageIndex) {
+        following = anchor;
+        break;
+      }
     }
 
-    final rightIndex = lowerBoundByXNorm(systemAnchors, clampedX);
-    final left = systemAnchors[rightIndex - 1];
-    final right = systemAnchors[rightIndex];
+    if (previous != null && following != null) {
+      final spanX = following.xNorm - previous.xNorm;
+      final fraction = spanX.abs() <= 1e-9
+          ? xNorm
+          : ((xNorm - previous.xNorm) / spanX).clamp(0.0, 1.0);
+      final frameIndex = previous.frameIndex +
+          fraction * (following.frameIndex - previous.frameIndex);
+      return frameIndex.clamp(anchors.first.frameIndex, anchors.last.frameIndex);
+    }
+    if (following != null) {
+      return following.frameIndex;
+    }
+    if (previous != null) {
+      return previous.frameIndex;
+    }
+    return anchors.first.frameIndex;
+  }
+
+  /// Inverse-lerps [xNorm] along [lerpAnchors] sorted by xNorm.
+  double interpolateFrameByXNorm({
+    required List<TimelineAnchor> lerpAnchors,
+    required double xNorm,
+    required List<TimelineAnchor> documentAnchors,
+  }) {
+    if (lerpAnchors.isEmpty) {
+      return documentAnchors.first.frameIndex;
+    }
+    if (lerpAnchors.length == 1) {
+      return lerpAnchors.first.frameIndex;
+    }
+
+    if (xNorm <= lerpAnchors.first.xNorm) {
+      return lerpAnchors.first.frameIndex;
+    }
+    if (xNorm >= lerpAnchors.last.xNorm) {
+      return lerpAnchors.last.frameIndex;
+    }
+
+    final rightIndex = lowerBoundByXNorm(lerpAnchors, xNorm);
+    final left = lerpAnchors[rightIndex - 1];
+    final right = lerpAnchors[rightIndex];
     final span = right.xNorm - left.xNorm;
-    final fraction = span <= 0.0 ? 0.0 : (clampedX - left.xNorm) / span;
-    final frameIndex = left.frameIndex + fraction * (right.frameIndex - left.frameIndex);
+    final fraction = span <= 0.0 ? 0.0 : (xNorm - left.xNorm) / span;
+    final frameIndex =
+        left.frameIndex + fraction * (right.frameIndex - left.frameIndex);
 
-    final minFrame = anchors.first.frameIndex;
-    final maxFrame = anchors.last.frameIndex;
+    final minFrame = documentAnchors.first.frameIndex;
+    final maxFrame = documentAnchors.last.frameIndex;
     return frameIndex.clamp(minFrame, maxFrame);
   }
 
@@ -117,6 +185,10 @@ final class ScoreTimelineMapper {
     List<TimelineAnchor> pageAnchors,
     double tapYNorm,
   ) {
+    if (pageAnchors.isEmpty) {
+      return const <TimelineAnchor>[];
+    }
+
     final systems = <List<TimelineAnchor>>[];
     for (final anchor in pageAnchors) {
       var assigned = false;

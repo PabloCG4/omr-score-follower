@@ -149,9 +149,9 @@ class ScoreLibraryModalState extends State<ScoreLibraryModal> {
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
                 child: Text(
                   'Import a PDF to process it with the OMR service. '
-                  'The practice screen shows the selected score PDF; '
-                  'live audio tracking still uses the demo chromagram pack '
-                  'until a later phase.',
+                  'The practice screen shows the selected score PDF and uses '
+                  'its structural anchors for the cursor; live microphone '
+                  'feature extraction is unchanged until a later phase.',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
               ),
@@ -281,9 +281,7 @@ class ScoreLibraryModalState extends State<ScoreLibraryModal> {
       child: ListTile(
         leading: const Icon(Icons.picture_as_pdf_outlined),
         title: Text(document.title),
-        subtitle: const Text(
-          'Ingested — Ready (tracking loader in a later phase)',
-        ),
+        subtitle: const Text('Ingested — Ready'),
         trailing: isSelected
             ? const Icon(Icons.check_circle)
             : const Chip(label: Text('Ready')),

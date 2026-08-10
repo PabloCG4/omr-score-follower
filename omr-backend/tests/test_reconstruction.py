@@ -144,6 +144,82 @@ def test_reconstruction_output_passes_model_validate() -> None:
     assert frame_indices == sorted(frame_indices)
 
 
+def test_multi_page_anchors_have_increasing_frames_on_later_pages() -> None:
+    """Notes on page 1 must produce page-1 anchors that are not collapsed to frame 0."""
+    from app.reconstruction.document_synthesizer import (
+        _build_anchors,
+        _interpolate_frame_at_x,
+        frames_per_quarter,
+    )
+    from app.reconstruction.timeline_builder import ReconstructedNote
+
+    fpq = frames_per_quarter()
+    notes = [
+        ReconstructedNote(
+            page_index=0,
+            x_center=120.0,
+            y_center=150.0,
+            midi_pitch=64,
+            duration_quarters=1.0,
+            staff_system_id=0,
+            onset_quarters=0.0,
+        ),
+        ReconstructedNote(
+            page_index=0,
+            x_center=300.0,
+            y_center=150.0,
+            midi_pitch=67,
+            duration_quarters=1.0,
+            staff_system_id=0,
+            onset_quarters=1.0,
+        ),
+        ReconstructedNote(
+            page_index=1,
+            x_center=140.0,
+            y_center=160.0,
+            midi_pitch=69,
+            duration_quarters=1.0,
+            staff_system_id=1,
+            onset_quarters=2.0,
+        ),
+        ReconstructedNote(
+            page_index=1,
+            x_center=320.0,
+            y_center=160.0,
+            midi_pitch=71,
+            duration_quarters=1.0,
+            staff_system_id=1,
+            onset_quarters=3.0,
+        ),
+    ]
+    pages = [
+        PageSize(page_index=0, width_px=640, height_px=360),
+        PageSize(page_index=1, width_px=640, height_px=360),
+    ]
+
+    # Barline on page 1 with no page-local notes must not resolve to frame 0.
+    # (Simulate empty page notes for page 2 index that has notes on page 1.)
+    fallback = _interpolate_frame_at_x(notes, page_index=2, x_position=200.0, frames_per_quarter_value=fpq)
+    assert fallback > 0.0
+
+    frame_count = max(1, int((3.0 + 1.0) * fpq))
+    anchors = _build_anchors(
+        detections=[],
+        systems=[],
+        notes=notes,
+        pages=pages,
+        frame_count=frame_count,
+        frames_per_quarter_value=fpq,
+    )
+    page1_anchors = [a for a in anchors if int(a["pageIndex"]) == 1]
+    assert len(page1_anchors) >= 2
+    page1_frames = [float(a["frameIndex"]) for a in page1_anchors]
+    assert min(page1_frames) > 0.0
+    assert page1_frames == sorted(page1_frames)
+    all_frames = [float(a["frameIndex"]) for a in anchors]
+    assert all_frames == sorted(all_frames)
+
+
 def test_half_spaces_and_treble_pitches() -> None:
     geometry = treble_staff_geometry()
     # Bottom line E4

@@ -10,7 +10,6 @@ import '../config/tracking_mode.dart';
 import '../config/tracking_session_config.dart';
 import '../score/score_document.dart';
 import '../score/score_document_loader.dart';
-import '../score/score_library_controller.dart';
 import '../score/score_timeline_mapper.dart';
 import '../score/score_visual_document.dart';
 import '../score/score_visual_document_loader.dart';
@@ -44,8 +43,8 @@ final class FollowingSessionController extends ChangeNotifier {
 
   ScoreDocument? scoreDocument;
 
-  /// Practice PDF for [ScoreViewport]. Separate from [scoreDocument] until
-  /// D.2/D.3 unify engine chromagram loading with the selected structural pack.
+  /// Practice PDF for [ScoreViewport]. Geometry/anchors live on [scoreDocument]
+  /// (structural JSON or demo pack); the PDF supplies page rasters only.
   ScoreVisualDocument? scoreVisualDocument;
 
   bool isRunning = false;
@@ -56,6 +55,7 @@ final class FollowingSessionController extends ChangeNotifier {
   int countdownSecondsRemaining = 0;
   int currentPageIndex = 0;
   String? lastErrorMessage;
+  String? lastWarningMessage;
 
   /// Frame index captured when Start was pressed; re-applied at countdown 0
   /// so ambient audio during the pre-roll cannot leave the DTW mid-score.
@@ -88,17 +88,22 @@ final class FollowingSessionController extends ChangeNotifier {
       scoreDocument?.displayTitle ??
       'Score Follower';
 
-  /// Loads engine demo pack and practice PDF in parallel (D.1 dual path).
+  /// Loads tracking geometry/chromagram and practice PDF for the selected score.
+  ///
+  /// Reference chromagram floats are injected via the existing FFI
+  /// [ScoreFollowerEngine.loadReferenceChromagram] path. Live microphone → CQT
+  /// feature extraction is unchanged until D.3.
   Future<void> loadSessionDocuments() async {
+    lastWarningMessage = null;
     await Future.wait<void>([
       loadScore(),
       loadScoreVisual(),
     ]);
+    notePageCountMismatchIfNeeded();
   }
 
-  /// Temporary D.1 path: always loads the bundled demo chromagram pack for the
-  /// native engine. Live DTW still ignores [sessionConfig.scoreId] until D.2.
-  Future<void> loadScore() async {
+  /// Loads [sessionConfig.scoreId] into [scoreDocument] and the native engine.
+  Future<void> loadScore({String? scoreId}) async {
     isLoadingScore = true;
     lastErrorMessage = null;
     notifyListeners();
@@ -106,17 +111,20 @@ final class FollowingSessionController extends ChangeNotifier {
       await tearDownCapturePipeline();
       destroyEngine();
 
-      // Ignore caller/session score id for the engine until D.2/D.3.
-      final document =
-          await scoreDocumentLoader.loadFromAssets(demoScorePreferenceId);
+      final document = await scoreDocumentLoader.loadForScoreId(
+        scoreId ?? sessionConfig.scoreId,
+      );
       scoreDocument = document;
-      currentPageIndex = 0;
+      currentPageIndex = clampPageIndexToVisualBounds(0);
       cursorDisplayModel.attachScoreDocument(document);
       ensureEngineLoaded(document);
       applyTrackingModeToEngineAndCursor();
       seekNativeAndUi(0.0, notifyPage: true);
     } catch (error) {
-      lastErrorMessage = error.toString();
+      final message = error is ScoreDocumentLoadException
+          ? error.message
+          : error.toString();
+      lastErrorMessage = message;
     } finally {
       isLoadingScore = false;
       notifyListeners();
@@ -124,7 +132,7 @@ final class FollowingSessionController extends ChangeNotifier {
   }
 
   /// Opens the practice PDF for [sessionConfig.scoreId] (demo asset or
-  /// persisted `original.pdf`). Does not feed the DTW engine.
+  /// persisted `original.pdf`).
   Future<void> loadScoreVisual({String? scoreId}) async {
     isLoadingVisualDocument = true;
     notifyListeners();
@@ -139,7 +147,7 @@ final class FollowingSessionController extends ChangeNotifier {
         scoreId ?? sessionConfig.scoreId,
       );
       scoreVisualDocument = document;
-      currentPageIndex = 0;
+      currentPageIndex = clampPageIndexToVisualBounds(0);
     } catch (error) {
       final message = error is ScoreVisualDocumentException
           ? error.message
@@ -149,6 +157,33 @@ final class FollowingSessionController extends ChangeNotifier {
       isLoadingVisualDocument = false;
       notifyListeners();
     }
+  }
+
+  /// Surfaces a non-fatal note when PDF page count and structural pages differ.
+  void notePageCountMismatchIfNeeded() {
+    final tracking = scoreDocument;
+    final visual = scoreVisualDocument;
+    if (tracking == null || visual == null) {
+      return;
+    }
+    if (tracking.pages.length == visual.pageCount) {
+      return;
+    }
+    lastWarningMessage =
+        'PDF has ${visual.pageCount} page(s) but structural data has '
+        '${tracking.pages.length} page(s). Cursor mapping follows structural '
+        'anchors; re-import if pages look wrong.';
+    notifyListeners();
+  }
+
+  /// Clamps [pageIndex] to the practice PDF page range when a visual document
+  /// is loaded, preventing PageView jumps to invalid indices.
+  int clampPageIndexToVisualBounds(int pageIndex) {
+    final visualCount = visualPageCount;
+    if (visualCount <= 0) {
+      return pageIndex < 0 ? 0 : pageIndex;
+    }
+    return pageIndex.clamp(0, visualCount - 1);
   }
 
   /// Pushes [sessionConfig] into the native engine and [cursorDisplayModel].
@@ -304,16 +339,21 @@ final class FollowingSessionController extends ChangeNotifier {
 
     if (sessionConfig.trackingMode != TrackingMode.fixedTempo) {
       cursorDisplayModel.setTargetFrameIndex(position.referenceFrameIndex);
-      final mappedPage =
-          timelineMapper.mapFrameIndex(document, position.referenceFrameIndex).pageIndex;
+      final mappedPage = clampPageIndexToVisualBounds(
+        timelineMapper
+            .mapFrameIndex(document, position.referenceFrameIndex)
+            .pageIndex,
+      );
       if (mappedPage != currentPageIndex) {
         currentPageIndex = mappedPage;
         notifyListeners();
       }
     } else {
-      final mappedPage = timelineMapper
-          .mapFrameIndex(document, cursorDisplayModel.targetFrameIndex)
-          .pageIndex;
+      final mappedPage = clampPageIndexToVisualBounds(
+        timelineMapper
+            .mapFrameIndex(document, cursorDisplayModel.targetFrameIndex)
+            .pageIndex,
+      );
       if (mappedPage != currentPageIndex) {
         currentPageIndex = mappedPage;
         notifyListeners();
@@ -392,7 +432,7 @@ final class FollowingSessionController extends ChangeNotifier {
     if (visual == null || visual.pageCount == 0) {
       return;
     }
-    final clamped = pageIndex.clamp(0, visual.pageCount - 1);
+    final clamped = clampPageIndexToVisualBounds(pageIndex);
     if (clamped == currentPageIndex) {
       return;
     }
@@ -406,10 +446,11 @@ final class FollowingSessionController extends ChangeNotifier {
     if (!canNavigateManually) {
       return;
     }
-    if (currentPageIndex == pageIndex) {
+    final clamped = clampPageIndexToVisualBounds(pageIndex);
+    if (currentPageIndex == clamped) {
       return;
     }
-    currentPageIndex = pageIndex;
+    currentPageIndex = clamped;
     notifyListeners();
   }
 
@@ -457,7 +498,11 @@ final class FollowingSessionController extends ChangeNotifier {
       xNorm: xNorm,
       yNorm: yNorm,
     );
-    seekToFrameIndex(frameIndex);
+    seekNativeAndUi(
+      frameIndex,
+      notifyPage: true,
+      preferredPageIndex: pageIndex,
+    );
   }
 
   void ensureEngineLoaded(ScoreDocument document) {
@@ -484,14 +529,24 @@ final class FollowingSessionController extends ChangeNotifier {
     engine = created;
   }
 
-  void seekNativeAndUi(double frameIndex, {required bool notifyPage}) {
+  void seekNativeAndUi(
+    double frameIndex, {
+    required bool notifyPage,
+    int? preferredPageIndex,
+  }) {
     final document = scoreDocument;
     cursorDisplayModel.snapToFrameIndex(frameIndex);
 
-    if (document != null && notifyPage) {
-      final mappedPage = timelineMapper.mapFrameIndex(document, frameIndex).pageIndex;
-      if (mappedPage != currentPageIndex) {
-        currentPageIndex = mappedPage;
+    if (notifyPage) {
+      if (preferredPageIndex != null) {
+        currentPageIndex = clampPageIndexToVisualBounds(preferredPageIndex);
+      } else if (document != null) {
+        final mappedPage = clampPageIndexToVisualBounds(
+          timelineMapper.mapFrameIndex(document, frameIndex).pageIndex,
+        );
+        if (mappedPage != currentPageIndex) {
+          currentPageIndex = mappedPage;
+        }
       }
     }
 
