@@ -7,13 +7,13 @@ final class OmrApiConfig {
     this.receiveTimeout = const Duration(seconds: 300),
   });
 
-  /// Placeholder host used until a real backend URL is injected by the host app.
-  static const String defaultBaseUrl = 'https://api.example.com';
+  /// Local FastAPI OMR backend (Windows desktop / TFM integration default).
+  static const String defaultBaseUrl = 'http://127.0.0.1:8000';
 
   /// Multipart upload endpoint path (appended to [baseUrl]).
   static const String defaultProcessPath = '/v1/omr/scores';
 
-  /// Origin without a trailing slash (e.g. `https://api.example.com`).
+  /// Origin without a trailing slash (e.g. `http://127.0.0.1:8000`).
   final String baseUrl;
 
   /// Path beginning with `/` for `POST` multipart PDF upload.

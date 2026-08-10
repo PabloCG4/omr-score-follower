@@ -6,8 +6,8 @@ import '../database/app_database.dart';
 /// Persistence API for [PersistedScoreDocument] metadata rows.
 ///
 /// PDF upload and OMR processing live in `lib/omr/` ([OmrScoreIngestionService]).
-/// Tracking still loads the demo asset pack until a later phase maps these
-/// rows into a filesystem [ScoreDocument] loader.
+/// The practice screen loads [originalPdfLocalPath] via [ScoreVisualDocumentLoader];
+/// the DTW engine still uses the demo chromagram pack until D.2/D.3.
 final class ScoreDocumentRepository {
   ScoreDocumentRepository(this.database);
 

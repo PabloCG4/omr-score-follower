@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../config/tracking_mode.dart';
 import '../config/tracking_session_config.dart';
+import '../omr/score_local_file_store.dart';
+import '../persistence/app_database_provider.dart';
+import '../persistence/repositories/score_document_repository.dart';
+import '../score/score_visual_document_loader.dart';
 import '../session/alignment_snapshot.dart';
 import '../session/cursor_display_model.dart';
 import '../session/following_session_controller.dart';
@@ -31,11 +35,18 @@ class TrackingScreenState extends State<TrackingScreen>
   void initState() {
     super.initState();
     cursorDisplayModel = CursorDisplayModel(tickerProvider: this);
+    final visualLoader = ScoreVisualDocumentLoader(
+      scoreDocumentRepository: ScoreDocumentRepository(
+        AppDatabaseProvider.requireDatabase,
+      ),
+      fileStore: ScoreLocalFileStore(),
+    );
     sessionController = FollowingSessionController(
       cursorDisplayModel: cursorDisplayModel,
       sessionConfig: widget.config,
+      scoreVisualDocumentLoader: visualLoader,
     );
-    sessionController.loadScore();
+    sessionController.loadSessionDocuments();
   }
 
   @override
@@ -54,8 +65,8 @@ class TrackingScreenState extends State<TrackingScreen>
         final maxFrame = document == null
             ? 0.0
             : document.anchors.last.frameIndex.toDouble();
-        final pageCount = document?.pages.length ?? 0;
-        final title = document?.displayTitle ?? 'Score Follower';
+        final pageCount = sessionController.visualPageCount;
+        final title = sessionController.practiceDisplayTitle;
         final modeLabel = widget.config.trackingMode.displayLabel;
 
         return Scaffold(
@@ -169,7 +180,7 @@ class TrackingScreenState extends State<TrackingScreen>
                 canGoPrevious: sessionController.currentPageIndex > 0,
                 canGoNext: pageCount > 0 &&
                     sessionController.currentPageIndex < pageCount - 1,
-                isLoading: sessionController.isLoadingScore,
+                isLoading: sessionController.isLoadingSessionDocuments,
                 onStartStop: () {
                   if (sessionController.isSessionActive) {
                     sessionController.stop();

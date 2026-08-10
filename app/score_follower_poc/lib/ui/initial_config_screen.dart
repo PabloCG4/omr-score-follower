@@ -312,8 +312,10 @@ class InitialConfigScreenState extends State<InitialConfigScreen> {
       if (!mounted) {
         return;
       }
+      final libraryController = ScoreLibraryScope.read(context);
       final config = TrackingSessionConfig(
         trackingMode: selectedMode,
+        scoreId: libraryController.selectedScoreId,
         instrumentId: savedInstrument.id,
         baseFrequencyHz: savedInstrument.baseFrequencyHz,
         transpositionSemitones: savedInstrument.transpositionSemitones,

@@ -20,9 +20,9 @@ final class OmrScoreIngestionResult {
 
 /// Orchestrates OMR upload, local PDF/JSON persistence, and Drift insertion.
 ///
-/// Callers (future UI) supply a local PDF [File]; this service does not open
-/// a file picker. Tracking still uses the asset demo pack until a later phase
-/// wires [PersistedScoreDocument] into [ScoreDocumentLoader].
+/// Callers supply a local PDF [File]; this service does not open a file picker.
+/// Practice UI loads the persisted PDF; live DTW still uses the demo chromagram
+/// pack until D.2/D.3.
 final class OmrScoreIngestionService {
   OmrScoreIngestionService({
     required this.apiClient,

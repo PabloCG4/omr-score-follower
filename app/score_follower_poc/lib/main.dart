@@ -1,5 +1,6 @@
 // Phase 5.5.3 entry: open local SQLite, wire score library, show config UI.
 import 'package:flutter/material.dart';
+import 'package:pdfrx/pdfrx.dart';
 
 import 'omr/omr_api_client.dart';
 import 'omr/omr_score_ingestion_service.dart';
@@ -12,6 +13,7 @@ import 'ui/initial_config_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await pdfrxFlutterInitialize();
   final database = await AppDatabaseProvider.initialize();
 
   final scoreDocumentRepository = ScoreDocumentRepository(database);

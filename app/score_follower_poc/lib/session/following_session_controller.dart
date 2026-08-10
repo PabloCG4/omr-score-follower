@@ -10,7 +10,10 @@ import '../config/tracking_mode.dart';
 import '../config/tracking_session_config.dart';
 import '../score/score_document.dart';
 import '../score/score_document_loader.dart';
+import '../score/score_library_controller.dart';
 import '../score/score_timeline_mapper.dart';
+import '../score/score_visual_document.dart';
+import '../score/score_visual_document_loader.dart';
 import 'alignment_snapshot.dart';
 import 'cursor_display_model.dart';
 
@@ -21,6 +24,7 @@ final class FollowingSessionController extends ChangeNotifier {
   FollowingSessionController({
     required this.cursorDisplayModel,
     required this.sessionConfig,
+    required this.scoreVisualDocumentLoader,
     ScoreDocumentLoader? scoreDocumentLoader,
     AudioRecorder? audioRecorder,
     this.timelineMapper = const ScoreTimelineMapper(),
@@ -30,6 +34,7 @@ final class FollowingSessionController extends ChangeNotifier {
   final CursorDisplayModel cursorDisplayModel;
   final TrackingSessionConfig sessionConfig;
   final ScoreDocumentLoader scoreDocumentLoader;
+  final ScoreVisualDocumentLoader scoreVisualDocumentLoader;
   final AudioRecorder audioRecorder;
   final ScoreTimelineMapper timelineMapper;
 
@@ -38,9 +43,15 @@ final class FollowingSessionController extends ChangeNotifier {
       ValueNotifier<AlignmentSnapshot>(AlignmentSnapshot.zero);
 
   ScoreDocument? scoreDocument;
+
+  /// Practice PDF for [ScoreViewport]. Separate from [scoreDocument] until
+  /// D.2/D.3 unify engine chromagram loading with the selected structural pack.
+  ScoreVisualDocument? scoreVisualDocument;
+
   bool isRunning = false;
   bool isCountingDown = false;
   bool isLoadingScore = false;
+  bool isLoadingVisualDocument = false;
   bool isArmingCapturePipeline = false;
   int countdownSecondsRemaining = 0;
   int currentPageIndex = 0;
@@ -64,11 +75,30 @@ final class FollowingSessionController extends ChangeNotifier {
   /// True while counting down or actively tracking (mic owned, nav gated).
   bool get isSessionActive => isCountingDown || isRunning;
 
-  bool get canNavigateManually => !isSessionActive && scoreDocument != null;
+  bool get canNavigateManually =>
+      !isSessionActive && scoreVisualDocument != null;
 
-  /// Loads [sessionConfig.scoreId] from assets, creates/recreates the
-  /// native engine, applies tracking mode, and seeks to frame 0.
-  Future<void> loadScore({String? scoreId}) async {
+  bool get isLoadingSessionDocuments =>
+      isLoadingScore || isLoadingVisualDocument;
+
+  int get visualPageCount => scoreVisualDocument?.pageCount ?? 0;
+
+  String get practiceDisplayTitle =>
+      scoreVisualDocument?.displayTitle ??
+      scoreDocument?.displayTitle ??
+      'Score Follower';
+
+  /// Loads engine demo pack and practice PDF in parallel (D.1 dual path).
+  Future<void> loadSessionDocuments() async {
+    await Future.wait<void>([
+      loadScore(),
+      loadScoreVisual(),
+    ]);
+  }
+
+  /// Temporary D.1 path: always loads the bundled demo chromagram pack for the
+  /// native engine. Live DTW still ignores [sessionConfig.scoreId] until D.2.
+  Future<void> loadScore() async {
     isLoadingScore = true;
     lastErrorMessage = null;
     notifyListeners();
@@ -76,8 +106,9 @@ final class FollowingSessionController extends ChangeNotifier {
       await tearDownCapturePipeline();
       destroyEngine();
 
+      // Ignore caller/session score id for the engine until D.2/D.3.
       final document =
-          await scoreDocumentLoader.loadFromAssets(scoreId ?? sessionConfig.scoreId);
+          await scoreDocumentLoader.loadFromAssets(demoScorePreferenceId);
       scoreDocument = document;
       currentPageIndex = 0;
       cursorDisplayModel.attachScoreDocument(document);
@@ -88,6 +119,34 @@ final class FollowingSessionController extends ChangeNotifier {
       lastErrorMessage = error.toString();
     } finally {
       isLoadingScore = false;
+      notifyListeners();
+    }
+  }
+
+  /// Opens the practice PDF for [sessionConfig.scoreId] (demo asset or
+  /// persisted `original.pdf`). Does not feed the DTW engine.
+  Future<void> loadScoreVisual({String? scoreId}) async {
+    isLoadingVisualDocument = true;
+    notifyListeners();
+    try {
+      final previous = scoreVisualDocument;
+      scoreVisualDocument = null;
+      if (previous != null) {
+        await previous.dispose();
+      }
+
+      final document = await scoreVisualDocumentLoader.load(
+        scoreId ?? sessionConfig.scoreId,
+      );
+      scoreVisualDocument = document;
+      currentPageIndex = 0;
+    } catch (error) {
+      final message = error is ScoreVisualDocumentException
+          ? error.message
+          : error.toString();
+      lastErrorMessage = message;
+    } finally {
+      isLoadingVisualDocument = false;
       notifyListeners();
     }
   }
@@ -329,11 +388,11 @@ final class FollowingSessionController extends ChangeNotifier {
     if (!canNavigateManually) {
       return;
     }
-    final document = scoreDocument;
-    if (document == null) {
+    final visual = scoreVisualDocument;
+    if (visual == null || visual.pageCount == 0) {
       return;
     }
-    final clamped = pageIndex.clamp(0, document.pages.length - 1);
+    final clamped = pageIndex.clamp(0, visual.pageCount - 1);
     if (clamped == currentPageIndex) {
       return;
     }
@@ -482,6 +541,11 @@ final class FollowingSessionController extends ChangeNotifier {
     countdownTimer = null;
     unawaited(tearDownCapturePipeline());
     destroyEngine();
+    final visual = scoreVisualDocument;
+    scoreVisualDocument = null;
+    if (visual != null) {
+      unawaited(visual.dispose());
+    }
     cursorDisplayModel.stop();
     isRunning = false;
     isCountingDown = false;

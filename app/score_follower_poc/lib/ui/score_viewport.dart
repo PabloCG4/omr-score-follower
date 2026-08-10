@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../session/cursor_display_model.dart';
 import '../session/following_session_controller.dart';
 import 'cursor_overlay.dart';
-import 'score_page_layer.dart';
+import 'pdf_score_page_layer.dart';
 
 /// Score pages plus the selectively-rebuilt cursor overlay. Listens to
 /// [FollowingSessionController] only for page-index / document changes; the
@@ -66,8 +66,11 @@ class ScoreViewportState extends State<ScoreViewport> {
 
   @override
   Widget build(BuildContext context) {
-    final document = widget.sessionController.scoreDocument;
-    if (document == null) {
+    final visualDocument = widget.sessionController.scoreVisualDocument;
+    if (widget.sessionController.isLoadingVisualDocument) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (visualDocument == null) {
       return const Center(child: Text('No score loaded.'));
     }
 
@@ -84,9 +87,9 @@ class ScoreViewportState extends State<ScoreViewport> {
             lastSyncedPageIndex = pageIndex;
             widget.sessionController.adoptPageIndexFromViewport(pageIndex);
           },
-          itemCount: document.pages.length,
+          itemCount: visualDocument.pageCount,
           itemBuilder: (context, pageIndex) {
-            final page = document.pages[pageIndex];
+            final page = visualDocument.pages[pageIndex];
             final pageSize = computeLetterboxedSize(
               constraints.biggest,
               page.aspectRatio,
@@ -109,7 +112,10 @@ class ScoreViewportState extends State<ScoreViewport> {
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
-                      ScorePageLayer(page: page),
+                      PdfScorePageLayer(
+                        pdfDocument: visualDocument.pdfDocument,
+                        pageIndex: pageIndex,
+                      ),
                       ListenableBuilder(
                         listenable: widget.cursorDisplayModel,
                         builder: (context, child) {
