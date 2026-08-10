@@ -13,6 +13,7 @@ import '../score/score_document_loader.dart';
 import '../score/score_timeline_mapper.dart';
 import '../score/score_visual_document.dart';
 import '../score/score_visual_document_loader.dart';
+import '../score/tracking_document_guards.dart';
 import 'alignment_snapshot.dart';
 import 'cursor_display_model.dart';
 
@@ -90,9 +91,10 @@ final class FollowingSessionController extends ChangeNotifier {
 
   /// Loads tracking geometry/chromagram and practice PDF for the selected score.
   ///
-  /// Reference chromagram floats are injected via the existing FFI
-  /// [ScoreFollowerEngine.loadReferenceChromagram] path. Live microphone → CQT
-  /// feature extraction is unchanged until D.3.
+  /// The reference chromagram (structural JSON or bundled demo `.f32`) is
+  /// injected via FFI [ScoreFollowerEngine.loadReferenceChromagram]. Live
+  /// microphone audio is converted to query chromagrams by the native CQT
+  /// path and aligned against that injected reference.
   Future<void> loadSessionDocuments() async {
     lastWarningMessage = null;
     await Future.wait<void>([
@@ -111,8 +113,11 @@ final class FollowingSessionController extends ChangeNotifier {
       await tearDownCapturePipeline();
       destroyEngine();
 
-      final document = await scoreDocumentLoader.loadForScoreId(
-        scoreId ?? sessionConfig.scoreId,
+      final resolvedScoreId = scoreId ?? sessionConfig.scoreId;
+      final document = await scoreDocumentLoader.loadForScoreId(resolvedScoreId);
+      assertTrackingDocumentReady(
+        document,
+        expectedScoreId: resolvedScoreId,
       );
       scoreDocument = document;
       currentPageIndex = clampPageIndexToVisualBounds(0);
@@ -269,6 +274,10 @@ final class FollowingSessionController extends ChangeNotifier {
     if (document == null) {
       throw StateError('No score document loaded.');
     }
+    assertTrackingDocumentReady(
+      document,
+      expectedScoreId: sessionConfig.scoreId,
+    );
 
     if (!await audioRecorder.hasPermission()) {
       throw StateError('Microphone permission was denied.');
@@ -505,7 +514,15 @@ final class FollowingSessionController extends ChangeNotifier {
     );
   }
 
+  /// Ensures the native engine exists and holds [document]'s reference chroma.
+  ///
+  /// Rejects empty or length-mismatched chromagrams so DTW never runs against
+  /// an unloaded native reference. [document.scoreId] must match the session.
   void ensureEngineLoaded(ScoreDocument document) {
+    assertTrackingDocumentReady(
+      document,
+      expectedScoreId: sessionConfig.scoreId,
+    );
     if (engine != null) {
       return;
     }

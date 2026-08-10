@@ -129,7 +129,7 @@ final class OmrStructuralNoteEvent {
   }
 }
 
-/// Reference chromagram payload for future [ScoreFollowerEngine.loadReferenceChromagram].
+/// Reference chromagram payload consumed by [ScoreFollowerEngine.loadReferenceChromagram].
 final class OmrReferenceChromagram {
   const OmrReferenceChromagram({
     required this.encoding,

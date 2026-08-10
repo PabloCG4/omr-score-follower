@@ -1,7 +1,7 @@
-/// Phase 5.5.3.A OMR data contract and network/persistence layer.
+/// Phase 5.5.3 OMR network, structural document, and local persistence layer.
 ///
-/// Import this library from future upload UI code. Does not wire tracking or
-/// replace the demo asset [ScoreDocumentLoader].
+/// Upload UI and ingestion write PDF + structural JSON. Tracking loads those
+/// artifacts through [ScoreDocumentLoader] / [ScoreVisualDocumentLoader].
 library;
 
 export 'omr_api_client.dart';

@@ -149,9 +149,9 @@ class ScoreLibraryModalState extends State<ScoreLibraryModal> {
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
                 child: Text(
                   'Import a PDF to process it with the OMR service. '
-                  'The practice screen shows the selected score PDF and uses '
-                  'its structural anchors for the cursor; live microphone '
-                  'feature extraction is unchanged until a later phase.',
+                  'The practice screen shows the selected score PDF and tracks '
+                  'live audio against that score’s structural chromagram and '
+                  'anchors. The bundled demo uses its packaged reference pack.',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
               ),

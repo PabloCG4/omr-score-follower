@@ -45,12 +45,18 @@ On a machine with a real Flutter SDK installed:
    this project's own established validate-cheaply-first practice), before
    attempting a real Android or iOS device build.
 
-## Why the reference chromagram is synthetic
+## Reference chromagram and live tracking
 
-`lib/main.dart`'s `buildSyntheticReferenceChromagram` reuses the exact same
-deterministic four-chord progression (C major, G major, A minor, F major)
-already validated end-to-end by `../../core-dsp/tests/dtw_validator.cpp`.
-Generating a real score-derived reference chromagram from a MusicXML/PDF
-source is an explicitly separate, later concern (Phase 5.2 and beyond), out
-of scope for a Phase 5.1 proof of concept whose only goal is proving the
-capture-to-alignment pipeline is alive end-to-end on a real device.
+Live microphone audio is converted to query chromagrams inside the native CQT
+pipeline (`score_follower_bridge` / `core-dsp`). The Online DTW engine aligns
+those live features against a **reference chromagram injected from Dart** via
+`ScoreFollowerEngine.loadReferenceChromagram`:
+
+- **Imported Ready scores:** floats decoded from the OMR `structural.json`
+  written during PDF ingestion (`ScoreDocumentLoader.loadFromPersistedStructural`).
+- **Bundled demo (`demo_four_chords`):** floats from
+  `assets/scores/demo_four_chords/reference_chromagram.f32`, matching the
+  progression historically validated by `../../core-dsp/tests/dtw_validator.cpp`.
+
+The native library does not embed a hardcoded demo score; an unloaded reference
+leaves DTW idle until Dart injects chromagram data.

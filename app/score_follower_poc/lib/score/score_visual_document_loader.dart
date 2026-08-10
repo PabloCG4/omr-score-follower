@@ -7,10 +7,11 @@ import '../persistence/repositories/score_document_repository.dart';
 import 'score_library_controller.dart';
 import 'score_visual_document.dart';
 
-/// Opens a PDF for the practice viewport without touching the DTW engine pack.
+/// Opens the practice-viewport PDF for a preference score id.
 ///
-/// D.1 keeps engine chromagram loading on the bundled demo assets; this loader
-/// is the separate visual path so D.2 can later unify on structural JSON.
+/// Resolves the bundled demo PDF or a persisted `original.pdf`. Tracking
+/// geometry and reference chromagrams are loaded separately by
+/// [ScoreDocumentLoader].
 final class ScoreVisualDocumentLoader {
   ScoreVisualDocumentLoader({
     required this.scoreDocumentRepository,

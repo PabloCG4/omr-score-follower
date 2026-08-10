@@ -449,9 +449,9 @@ class InitialConfigScreenState extends State<InitialConfigScreen> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Choose a bundled or imported score. Custom PDFs are '
-                      'processed in the background; tracking still uses the '
-                      'demo pack until the filesystem loader ships.',
+                      'Choose a bundled or imported score. Ready PDFs track '
+                      'from their structural chromagram and anchors; the '
+                      'bundled demo uses its asset pack.',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                     const SizedBox(height: 16),

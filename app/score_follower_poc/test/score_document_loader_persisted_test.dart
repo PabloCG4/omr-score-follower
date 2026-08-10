@@ -70,6 +70,11 @@ void main() {
         scoreDocument.referenceChromagramRowMajor.length,
         2 * omrPitchClassCount,
       );
+      expect(scoreDocument.referenceFrameCount, greaterThan(0));
+      expect(
+        scoreDocument.referenceChromagramRowMajor,
+        orderedEquals(structural.referenceChromagram.decodedRowMajor),
+      );
 
       final absoluteJson = await fileStore.resolveAbsoluteFile(jsonRelativePath);
       expect(absoluteJson.path, contains(path.join('scores', 'persisted-doc-99')));
