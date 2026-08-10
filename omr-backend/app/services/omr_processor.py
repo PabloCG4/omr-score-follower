@@ -1,4 +1,4 @@
-"""OMR processing abstraction, mock, and vision-backed implementation."""
+"""OMR processing abstraction, mock (tests), and vision-backed production implementation."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import base64
 import logging
 import struct
 import uuid
+from functools import lru_cache
 from pathlib import Path
 from typing import Protocol
 
@@ -38,7 +39,7 @@ class OmrProcessor(Protocol):
 
 
 class MockOmrProcessor:
-    """Simulates multi-second inference and returns a valid dummy document."""
+    """Test-only processor that returns a valid dummy document."""
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
@@ -104,7 +105,7 @@ class MockOmrProcessor:
 
 
 class VisionOmrProcessor:
-    """Runs DINOv2+SAHI vision then structural reconstruction."""
+    """Production processor: Faster R-CNN / SAHI vision then structural reconstruction."""
 
     def __init__(
         self,
@@ -134,6 +135,12 @@ class VisionOmrProcessor:
                 prefer_dinov2_hub=self.prefer_dinov2_hub,
             )
         return self.vision_service
+
+    def warmup(self) -> None:
+        """Eagerly construct the detection model (load weights) for low first-request latency."""
+        LOGGER.info("Warming up VisionOmrProcessor detection model.")
+        self._ensure_vision_service()
+        LOGGER.info("VisionOmrProcessor warmup complete.")
 
     async def process(
         self,
@@ -167,9 +174,15 @@ class VisionOmrProcessor:
             raise ProcessingAppError(f"OMR pipeline failed: {error}") from error
 
 
+@lru_cache
 def get_omr_processor() -> OmrProcessor:
-    """FastAPI dependency that returns the live vision-backed OMR processor."""
+    """FastAPI dependency: process-wide VisionOmrProcessor singleton."""
     return VisionOmrProcessor()
+
+
+def clear_omr_processor_cache() -> None:
+    """Clear the processor singleton (used by tests)."""
+    get_omr_processor.cache_clear()
 
 
 def _resolve_display_title(title: str | None, pdf_path: Path) -> str:

@@ -10,18 +10,26 @@ from fastapi.testclient import TestClient
 
 from app.core.config import Settings, get_settings
 from app.main import create_app
-from app.services.omr_processor import MockOmrProcessor, get_omr_processor
+from app.services.omr_processor import (
+    MockOmrProcessor,
+    clear_omr_processor_cache,
+    get_omr_processor,
+)
 from app.services.temp_storage import TempPdfStorage
 
 
 @pytest.fixture
 def test_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
     get_settings.cache_clear()
+    clear_omr_processor_cache()
     monkeypatch.setenv("OMR_MOCK_INFERENCE_DELAY_SECONDS", "0")
     monkeypatch.setenv("OMR_MAX_UPLOAD_BYTES", str(2 * 1024 * 1024))
+    monkeypatch.setenv("OMR_VISION_WARMUP_ON_STARTUP", "false")
+    monkeypatch.setenv("OMR_VISION_WEIGHTS_PATH", "")
     settings = get_settings()
     yield settings
     get_settings.cache_clear()
+    clear_omr_processor_cache()
 
 
 @pytest.fixture

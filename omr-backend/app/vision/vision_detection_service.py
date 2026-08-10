@@ -1,16 +1,19 @@
-"""Orchestrates PDF rasterization and SAHI sliced DINOv2 detection."""
+"""Orchestrates PDF rasterization and SAHI sliced detection."""
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
 
+from sahi.models.base import DetectionModel
 from sahi.predict import get_sliced_prediction
 
 from app.core.config import Settings, get_settings
 from app.core.errors import ProcessingAppError, ValidationAppError
-from app.vision.category_taxonomy import build_category_mapping, class_name_for_id
+from app.vision.category_taxonomy import build_category_mapping
+from app.vision.deepscores_categories import alias_to_reconstruction_class_name
 from app.vision.detections import PageImage, RawDetection
+from app.vision.fasterrcnn_sahi_model import FasterRcnnSahiDetectionModel
 from app.vision.pdf_rasterizer import PdfPageRasterizer
 from app.vision.sahi_dino_model import DinoV2SahiDetectionModel
 
@@ -25,7 +28,7 @@ class VisionDetectionService:
         *,
         settings: Settings | None = None,
         rasterizer: PdfPageRasterizer | None = None,
-        detection_model: DinoV2SahiDetectionModel | None = None,
+        detection_model: DetectionModel | None = None,
         prefer_dinov2_hub: bool = True,
     ) -> None:
         self.settings = settings if settings is not None else get_settings()
@@ -38,9 +41,23 @@ class VisionDetectionService:
         if self.detection_model is None:
             self.detection_model = self._build_detection_model()
 
-    def _build_detection_model(self) -> DinoV2SahiDetectionModel:
+    def _build_detection_model(self) -> DetectionModel:
+        weights_path = self.settings.resolved_vision_weights_path()
+        if weights_path is not None and weights_path.is_file():
+            LOGGER.info("Building Faster R-CNN SAHI model from %s", weights_path)
+            return FasterRcnnSahiDetectionModel(
+                model_path=str(weights_path),
+                confidence_threshold=self.settings.vision_confidence_threshold,
+                device=self.settings.vision_device,
+                image_size=self.settings.vision_input_size,
+                load_at_init=True,
+            )
+
+        LOGGER.warning(
+            "Vision weights missing at configured path; falling back to DINOv2 stub detector."
+        )
         return DinoV2SahiDetectionModel(
-            model_path=self.settings.vision_weights_path,
+            model_path=None,
             confidence_threshold=self.settings.vision_confidence_threshold,
             device=self.settings.vision_device,
             category_mapping=build_category_mapping(),
@@ -96,12 +113,13 @@ class VisionDetectionService:
                 x2 = float(bbox.maxx)
                 y2 = float(bbox.maxy)
                 class_id = int(object_prediction.category.id)
+                raw_name = str(object_prediction.category.name)
                 detections.append(
                     RawDetection(
                         page_index=page.page_index,
                         bbox_xyxy=(x1, y1, x2, y2),
                         class_id=class_id,
-                        class_name=class_name_for_id(class_id),
+                        class_name=alias_to_reconstruction_class_name(raw_name),
                         confidence=float(object_prediction.score.value),
                     )
                 )

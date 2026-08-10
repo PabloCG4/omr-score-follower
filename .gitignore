@@ -18,3 +18,5 @@ core-dsp/out/
 *.exe
 build/
 .vscode/
+*.pt
+*.pdf

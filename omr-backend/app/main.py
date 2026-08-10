@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -25,6 +26,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     configure_logging(settings.log_level)
     LOGGER.info("Starting %s", settings.app_name)
+
+    if settings.vision_warmup_on_startup:
+        from app.services.omr_processor import VisionOmrProcessor, get_omr_processor
+
+        processor = get_omr_processor()
+        if isinstance(processor, VisionOmrProcessor):
+            try:
+                await asyncio.to_thread(processor.warmup)
+            except Exception:  # noqa: BLE001 - startup should still serve health
+                LOGGER.exception(
+                    "Vision model warmup failed; first request will retry model load."
+                )
+
     yield
     LOGGER.info("Shutting down %s", settings.app_name)
 

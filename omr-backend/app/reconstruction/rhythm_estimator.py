@@ -22,6 +22,12 @@ REST_QUARTERS: dict[str, float] = {
     "restWhole": 4.0,
     "restHalf": 2.0,
     "restQuarter": 1.0,
+    "rest8th": 0.5,
+    "rest16th": 0.25,
+    "rest32nd": 0.125,
+    "rest64th": 0.0625,
+    "rest128th": 0.03125,
+    "restDoubleWhole": 8.0,
 }
 
 FLAG_DURATION_QUARTERS: dict[str, float] = {

@@ -1,9 +1,12 @@
 """Application settings for the stateless OMR FastAPI service."""
 
 from functools import lru_cache
+from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+DEFAULT_VISION_WEIGHTS_RELATIVE = Path("weights") / "omr_deepscores_best_50epoch.pt"
 
 
 class Settings(BaseSettings):
@@ -26,7 +29,7 @@ class Settings(BaseSettings):
     )
     log_level: str = "INFO"
 
-    # Vision inference (Phase 5.5.3.C.2)
+    # Vision inference (Phase 5.5.3.C.2 / C finalization)
     vision_raster_dpi: float = Field(default=200.0, gt=0.0)
     vision_max_pages: int = Field(default=50, ge=1)
     vision_slice_height: int = Field(default=512, ge=64)
@@ -34,8 +37,32 @@ class Settings(BaseSettings):
     vision_overlap_ratio: float = Field(default=0.2, ge=0.0, lt=1.0)
     vision_confidence_threshold: float = Field(default=0.25, ge=0.0, le=1.0)
     vision_device: str = "cpu"
-    vision_weights_path: str | None = None
-    vision_input_size: int = Field(default=518, ge=64)
+    vision_weights_path: str | None = Field(
+        default=str(DEFAULT_VISION_WEIGHTS_RELATIVE)
+    )
+    vision_input_size: int = Field(default=800, ge=64)
+    vision_warmup_on_startup: bool = True
+
+    @field_validator("vision_weights_path", mode="before")
+    @classmethod
+    def empty_weights_path_to_none(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    def resolved_vision_weights_path(self) -> Path | None:
+        """Resolve weights path relative to the process working directory when needed."""
+        if self.vision_weights_path is None:
+            return None
+        path = Path(self.vision_weights_path)
+        if path.is_file():
+            return path
+        candidate = Path.cwd() / path
+        if candidate.is_file():
+            return candidate
+        return path
 
 
 @lru_cache
