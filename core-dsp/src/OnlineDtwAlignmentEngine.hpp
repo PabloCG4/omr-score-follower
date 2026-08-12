@@ -109,8 +109,9 @@ private:
     std::size_t maxRunLengthFrames;
     double runLengthEscalationPenalty;
     double confidenceSmoothingFactor;
-    // Local cosine distance at/above this value is treated as a poor match
-    // (alignmentConfidence = 1 - distance falls to ~0.55 and below).
+    // Local chroma distance at/above this value is treated as a poor match
+    // (alignmentConfidence = 1 - distance falls to ~0.55 and below). Distance
+    // is cosine plus missing-reference-peak coverage cost (clamped to [0, 2]).
     double poorMatchLocalDistanceThreshold;
     // Extra cost added to diagonal/skip predecessors while the match is poor,
     // biasing the recurrence toward stall (hold position) on noise/silence.

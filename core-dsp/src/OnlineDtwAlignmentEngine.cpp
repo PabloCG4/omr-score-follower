@@ -12,33 +12,50 @@ namespace {
 
 constexpr double PositiveInfinity = std::numeric_limits<double>::infinity();
 
-// Cosine distance: 1 - cosineSimilarity. For the non-negative chroma
-// energies produced by FeatureExtractor implementations, cosine similarity
-// is bounded to [0, 1], so this local distance is bounded to [0, 1] as
-// well, keeping the DTW recurrence's accumulated cost predictable in
-// magnitude over a multi-minute performance.
-double computeCosineDistance(const ChromaVector& firstVector, const ChromaVector& secondVector) {
+// Weight on (1 - referenceCoverage). At 1.0, playing only half of a two-peak
+// chord typically pushes local distance above the poor-match / Strict freeze
+// band so the tracker cannot advance on incomplete polyphony.
+constexpr double MissingPeakWeight = 1.0;
+constexpr double CoverageEpsilon = 1e-12;
+
+// Local DTW cost: cosine distance plus a continuous missing-peak penalty.
+// Cosine alone is too permissive for grand-staff chords (one shared pitch
+// class still yields ~0.3 distance). Coverage measures how much of the
+// reference chroma mass is present in the live frame:
+//   coverage = sum_i min(live_i, ref_i) / sum_i ref_i
+// Missing reference energy raises cost so partial chords are rejected.
+double computeLocalChromaDistance(const ChromaVector& liveVector, const ChromaVector& referenceVector) {
     double dotProduct = 0.0;
-    double firstNormSquared = 0.0;
-    double secondNormSquared = 0.0;
+    double liveNormSquared = 0.0;
+    double referenceNormSquared = 0.0;
+    double coveredEnergy = 0.0;
+    double referenceEnergy = 0.0;
+
     for (std::size_t pitchClass = 0; pitchClass < PitchClassCount; ++pitchClass) {
-        const double firstValue = firstVector.pitchClassEnergies[pitchClass];
-        const double secondValue = secondVector.pitchClassEnergies[pitchClass];
-        dotProduct += firstValue * secondValue;
-        firstNormSquared += firstValue * firstValue;
-        secondNormSquared += secondValue * secondValue;
+        const double liveValue = liveVector.pitchClassEnergies[pitchClass];
+        const double referenceValue = referenceVector.pitchClassEnergies[pitchClass];
+        dotProduct += liveValue * referenceValue;
+        liveNormSquared += liveValue * liveValue;
+        referenceNormSquared += referenceValue * referenceValue;
+        coveredEnergy += std::min(liveValue, referenceValue);
+        referenceEnergy += referenceValue;
     }
 
-    const double denominator = std::sqrt(firstNormSquared) * std::sqrt(secondNormSquared);
-    if (denominator < 1e-12) {
-        return 1.0;  // One or both vectors are silent/near-zero; treat as maximally dissimilar.
+    double cosineDistance = 1.0;
+    const double denominator = std::sqrt(liveNormSquared) * std::sqrt(referenceNormSquared);
+    if (denominator >= 1e-12) {
+        // Clamped to [0, 1]: floating-point rounding can push similarity
+        // infinitesimally above 1.0 for identical vectors.
+        cosineDistance = std::clamp(1.0 - (dotProduct / denominator), 0.0, 1.0);
     }
-    // Clamped to [0, 1]: for numerically identical vectors, floating-point
-    // rounding in the square roots above can push dotProduct / denominator
-    // an infinitesimal amount above 1.0, which would otherwise surface as a
-    // meaningless negative distance (and a "-0.000" cumulative cost display
-    // artifact) instead of the mathematically exact zero.
-    return std::clamp(1.0 - (dotProduct / denominator), 0.0, 1.0);
+
+    double missingPeakCost = 0.0;
+    if (referenceEnergy >= CoverageEpsilon) {
+        const double coverage = std::clamp(coveredEnergy / referenceEnergy, 0.0, 1.0);
+        missingPeakCost = MissingPeakWeight * (1.0 - coverage);
+    }
+
+    return std::clamp(cosineDistance + missingPeakCost, 0.0, 2.0);
 }
 
 // Applies the tuning compensator's resolved whole-semitone offset, following
@@ -188,7 +205,7 @@ void OnlineDtwAlignmentEngine::ingestLiveChromaVector(const ChromaVector& liveCh
     for (std::size_t relativeIndex = 0; relativeIndex < activeWindowWidth; ++relativeIndex) {
         const std::size_t absoluteReferenceIndex = windowStartReferenceIndex + relativeIndex;
         const double localDistance =
-            computeCosineDistance(correctedLiveVector, referenceChromagram.frames[absoluteReferenceIndex]);
+            computeLocalChromaDistance(correctedLiveVector, referenceChromagram.frames[absoluteReferenceIndex]);
 
         double accumulatedCost;
         if (!hasIngestedFirstFrame) {
