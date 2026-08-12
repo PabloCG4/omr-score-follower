@@ -24,8 +24,11 @@ CLEF_CLASS_TO_KIND: dict[str, ClefKind] = {
     "clefC": "C",
 }
 
-SYSTEM_SPLIT_CLEF_GAP_FACTOR = 1.75
 ASSIGN_MAX_DISTANCE_INTERLINES = 3.5
+
+# Maximum gap (in interline units) between the bottom of an upper staff and the
+# top of a lower staff for a Treble+Bass pair to count as one grand staff.
+GRAND_STAFF_MAX_GAP_INTERLINES = 10.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,9 +44,17 @@ class StaffGeometry:
 
 @dataclass(slots=True)
 class StaffSystem:
+    """One staff of notation with optional grand-staff pairing metadata.
+
+    Independent staves (e.g. ensemble parts sharing the same clef) remain
+    separate systems. Only a Treble-above-Bass pair may share
+    [grand_staff_group_id] for concurrent timeline alignment.
+    """
+
     system_id: int
     geometry: StaffGeometry
     detections: list[RawDetection] = field(default_factory=list)
+    grand_staff_group_id: int | None = None
 
 
 def build_line_y_from_staff_bbox(
@@ -110,16 +121,23 @@ def build_line_y_from_clef(
 
 
 def assemble_staff_systems(detections: list[RawDetection]) -> list[StaffSystem]:
-    """Build staff systems from staff boxes (preferred) or clef clustering."""
+    """Build staff systems from staff boxes (preferred) or one system per clef.
+
+    Single-instrument tracking policy: never collapse ensemble staves into one
+    system. Grand-staff Treble+Bass pairs are linked via [grand_staff_group_id]
+    after assembly for concurrent timeline use only.
+    """
     by_page: dict[int, list[RawDetection]] = {}
     for detection in detections:
         by_page.setdefault(detection.page_index, []).append(detection)
 
     systems: list[StaffSystem] = []
     next_id = 0
+    next_group_id = 0
     for page_index in sorted(by_page.keys()):
         page_detections = by_page[page_index]
         page_systems = _assemble_page(page_index, page_detections, next_id)
+        next_group_id = link_grand_staff_pairs(page_systems, next_group_id)
         systems.extend(page_systems)
         next_id += len(page_systems)
 
@@ -163,25 +181,13 @@ def _assemble_page(
         )
         return []
 
-    heights = [bbox_height(c.bbox_xyxy) for c in clefs]
-    median_height = sorted(heights)[len(heights) // 2]
-    gap_threshold = SYSTEM_SPLIT_CLEF_GAP_FACTOR * median_height
-
-    groups: list[list[RawDetection]] = [[clefs[0]]]
-    for clef in clefs[1:]:
-        prev_y = detection_center(groups[-1][-1])[1]
-        cur_y = detection_center(clef)[1]
-        if cur_y - prev_y > gap_threshold:
-            groups.append([clef])
-        else:
-            groups[-1].append(clef)
-
-    systems = []
-    for offset, group in enumerate(groups):
-        primary = min(group, key=lambda d: detection_center(d)[0])
-        kind = CLEF_CLASS_TO_KIND[primary.class_name]
-        line_y, interline = build_line_y_from_clef(primary.bbox_xyxy, kind)
-        cx, _ = detection_center(primary)
+    # One StaffSystem per clef. Nearby same-clef ensemble parts must not
+    # collapse into a single system (former leftmost-clef grouping).
+    systems: list[StaffSystem] = []
+    for offset, clef in enumerate(clefs):
+        kind = CLEF_CLASS_TO_KIND[clef.class_name]
+        line_y, interline = build_line_y_from_clef(clef.bbox_xyxy, kind)
+        cx, _ = detection_center(clef)
         geometry = StaffGeometry(
             page_index=page_index,
             line_y=line_y,
@@ -191,6 +197,59 @@ def _assemble_page(
         )
         systems.append(StaffSystem(system_id=start_id + offset, geometry=geometry))
     return systems
+
+
+def link_grand_staff_pairs(
+    systems: list[StaffSystem],
+    next_group_id: int = 0,
+) -> int:
+    """Link adjacent Treble-above-Bass systems as grand-staff pairs.
+
+    Only the semantic combination upper clef G + lower clef F within a vertical
+    gap threshold receives a shared [grand_staff_group_id]. Ensemble staves
+    (G+G, F+F, inverted F above G, C-clefs) remain independent.
+
+    Returns the next free group id for subsequent pages.
+    """
+    if len(systems) < 2:
+        return next_group_id
+
+    ordered = sorted(
+        systems,
+        key=lambda system: (system.geometry.line_y[2], system.system_id),
+    )
+    index = 0
+    group_id = next_group_id
+    while index < len(ordered) - 1:
+        upper = ordered[index]
+        lower = ordered[index + 1]
+        if (
+            upper.grand_staff_group_id is None
+            and lower.grand_staff_group_id is None
+            and upper.geometry.clef_kind == "G"
+            and lower.geometry.clef_kind == "F"
+            and _grand_staff_vertical_gap_ok(upper, lower)
+        ):
+            upper.grand_staff_group_id = group_id
+            lower.grand_staff_group_id = group_id
+            group_id += 1
+            index += 2
+            continue
+        index += 1
+    return group_id
+
+
+def _grand_staff_vertical_gap_ok(upper: StaffSystem, lower: StaffSystem) -> bool:
+    """True when the lower staff sits immediately under the upper staff."""
+    gap = lower.geometry.line_y[0] - upper.geometry.line_y[4]
+    if gap < -1e-3:
+        return False
+    reference_interline = max(
+        upper.geometry.interline_px,
+        lower.geometry.interline_px,
+        1e-6,
+    )
+    return gap <= GRAND_STAFF_MAX_GAP_INTERLINES * reference_interline
 
 
 def _resolve_clef_for_staff(

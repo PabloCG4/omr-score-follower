@@ -14,6 +14,7 @@ from app.reconstruction.staff_system import (
     assemble_staff_systems,
     build_line_y_from_staff_bbox,
 )
+from app.reconstruction.timeline_builder import build_full_timeline
 from app.reconstruction.structural_reconstruction_service import (
     StructuralReconstructionService,
 )
@@ -280,8 +281,68 @@ def test_staff_assembly_from_two_staff_boxes() -> None:
     assert len(systems) == 2
     assert systems[0].geometry.clef_kind == "G"
     assert systems[1].geometry.clef_kind == "F"
+    assert systems[0].grand_staff_group_id is not None
+    assert systems[0].grand_staff_group_id == systems[1].grand_staff_group_id
     assert any(d.class_name == "noteheadBlack" for d in systems[0].detections)
     assert any(d.class_name == "noteheadBlack" for d in systems[1].detections)
+
+
+def test_ensemble_two_staff_boxes_both_treble_stay_ungrouped() -> None:
+    staff_top = detection("staff", (40.0, 80.0, 500.0, 160.0))
+    staff_bottom = detection("staff", (40.0, 280.0, 500.0, 360.0))
+    clef_top = detection("clefG", (50.0, 90.0, 90.0, 150.0))
+    clef_bottom = detection("clefG", (50.0, 290.0, 90.0, 350.0))
+
+    systems = assemble_staff_systems(
+        [staff_top, staff_bottom, clef_top, clef_bottom]
+    )
+    assert len(systems) == 2
+    assert systems[0].geometry.clef_kind == "G"
+    assert systems[1].geometry.clef_kind == "G"
+    assert systems[0].grand_staff_group_id is None
+    assert systems[1].grand_staff_group_id is None
+
+
+def test_clef_only_nearby_treble_pair_emits_two_systems() -> None:
+    # Nearby G+G must not collapse to one system (former leftmost-clef bug).
+    clef_top = detection("clefG", (50.0, 100.0, 90.0, 160.0))
+    clef_bottom = detection("clefG", (50.0, 180.0, 90.0, 240.0))
+
+    systems = assemble_staff_systems([clef_top, clef_bottom])
+    assert len(systems) == 2
+    assert all(system.grand_staff_group_id is None for system in systems)
+
+
+def test_clef_only_nearby_grand_staff_links_g_above_f() -> None:
+    clef_g = detection("clefG", (50.0, 100.0, 90.0, 160.0))
+    clef_f = detection("clefF", (50.0, 200.0, 90.0, 260.0))
+
+    systems = assemble_staff_systems([clef_g, clef_f])
+    assert len(systems) == 2
+    assert systems[0].geometry.clef_kind == "G"
+    assert systems[1].geometry.clef_kind == "F"
+    assert systems[0].grand_staff_group_id is not None
+    assert systems[0].grand_staff_group_id == systems[1].grand_staff_group_id
+
+
+def test_grand_staff_timeline_is_concurrent() -> None:
+    staff_top = detection("staff", (40.0, 80.0, 500.0, 160.0))
+    staff_bottom = detection("staff", (40.0, 200.0, 500.0, 280.0))
+    clef_top = detection("clefG", (50.0, 90.0, 90.0, 150.0))
+    clef_bottom = detection("clefF", (50.0, 210.0, 90.0, 270.0))
+    note_top = detection("noteheadBlack", (200.0, 110.0, 220.0, 130.0))
+    note_bottom = detection("noteheadBlack", (200.0, 230.0, 220.0, 250.0))
+
+    systems = assemble_staff_systems(
+        [staff_top, staff_bottom, clef_top, clef_bottom, note_top, note_bottom]
+    )
+    assert systems[0].grand_staff_group_id == systems[1].grand_staff_group_id
+
+    notes = build_full_timeline(systems)
+    assert len(notes) == 2
+    onsets = sorted(note.onset_quarters for note in notes)
+    # Concurrent grand staff: both staves share the same onset clock base.
+    assert onsets[0] == onsets[1] == 0.0
 
 
 def test_reconstruction_service_builds_valid_document() -> None:

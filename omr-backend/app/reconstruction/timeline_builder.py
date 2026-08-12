@@ -109,7 +109,12 @@ def build_timeline_for_system(
 
 
 def build_full_timeline(systems: list[StaffSystem]) -> list[ReconstructedNote]:
-    """Concatenate systems top-to-bottom, advancing global time across systems."""
+    """Build a global note timeline across systems.
+
+    Independent systems are concatenated top-to-bottom (sequential). Systems
+    that share a [StaffSystem.grand_staff_group_id] (Treble+Bass grand staff)
+    share one local onset clock so both staves advance concurrently.
+    """
     all_notes: list[ReconstructedNote] = []
     global_time = 0.0
     ordered = sorted(
@@ -120,7 +125,25 @@ def build_full_timeline(systems: list[StaffSystem]) -> list[ReconstructedNote]:
             system.system_id,
         ),
     )
-    for system in ordered:
+
+    index = 0
+    while index < len(ordered):
+        system = ordered[index]
+        group_id = system.grand_staff_group_id
+        if group_id is not None:
+            # Consume every member of this grand-staff group in page order.
+            span = 0
+            while index + span < len(ordered) and ordered[
+                index + span
+            ].grand_staff_group_id == group_id:
+                span += 1
+            pair = ordered[index : index + span]
+            notes, span_end = _concurrent_notes_for_systems(pair, global_time)
+            all_notes.extend(notes)
+            global_time += span_end
+            index += span
+            continue
+
         notes, rests = build_timeline_for_system(system)
         note_end = max(
             (note.onset_quarters + note.duration_quarters for note in notes),
@@ -143,4 +166,39 @@ def build_full_timeline(systems: list[StaffSystem]) -> list[ReconstructedNote]:
                 )
             )
         global_time += max(note_end, rest_end)
+        index += 1
+
     return all_notes
+
+
+def _concurrent_notes_for_systems(
+    systems: list[StaffSystem],
+    global_time: float,
+) -> tuple[list[ReconstructedNote], float]:
+    """Offset each system timeline by [global_time]; advance by max duration."""
+    merged: list[ReconstructedNote] = []
+    span_end = 0.0
+    for system in systems:
+        notes, rests = build_timeline_for_system(system)
+        note_end = max(
+            (note.onset_quarters + note.duration_quarters for note in notes),
+            default=0.0,
+        )
+        rest_end = max(
+            (rest.onset_quarters + rest.duration_quarters for rest in rests),
+            default=0.0,
+        )
+        span_end = max(span_end, note_end, rest_end)
+        for note in notes:
+            merged.append(
+                ReconstructedNote(
+                    page_index=note.page_index,
+                    x_center=note.x_center,
+                    y_center=note.y_center,
+                    midi_pitch=note.midi_pitch,
+                    duration_quarters=note.duration_quarters,
+                    staff_system_id=note.staff_system_id,
+                    onset_quarters=global_time + note.onset_quarters,
+                )
+            )
+    return merged, span_end
